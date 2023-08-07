@@ -14,10 +14,10 @@ import (
 	"net"
 	"os"
 	"runtime"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/sagernet/sing/common/atomic"
 	"golang.org/x/sys/windows"
 )
 

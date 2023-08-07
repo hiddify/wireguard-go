@@ -8,9 +8,9 @@ package device
 import (
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing/common/atomic"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/ratelimiter"
 	"golang.zx2c4.com/wireguard/rwcancel"

@@ -12,9 +12,9 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
+	"github.com/sagernet/sing/common/atomic"
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/conn/winrio"
 )

@@ -7,7 +7,8 @@ package device
 
 import (
 	"sync"
-	"sync/atomic"
+
+	"github.com/sagernet/sing/common/atomic"
 )
 
 type WaitPool struct {

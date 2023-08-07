@@ -9,9 +9,9 @@ import (
 	"container/list"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing/common/atomic"
 	"golang.zx2c4.com/wireguard/conn"
 )
 

@@ -8,9 +8,9 @@ package device
 import (
 	"crypto/cipher"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing/common/atomic"
 	"golang.zx2c4.com/wireguard/replay"
 )
 
