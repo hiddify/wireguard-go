@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
-	"golang.zx2c4.com/wireguard/ipc/namedpipe"
+	"github.com/sagernet/wireguard-go/ipc/namedpipe"
 )
 
 func randomPipePath() string {
