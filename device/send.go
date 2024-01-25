@@ -16,12 +16,13 @@ import (
 
 	"crypto/rand"
 	"fmt"
+	"math/big"
+
 	"github.com/sagernet/wireguard-go/conn"
 	"github.com/sagernet/wireguard-go/tun"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
-	"math/big"
 )
 
 /* Outbound flow
@@ -553,7 +554,10 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 
 func sendNoise(peer *Peer) error {
 	// Generate a random number of packets between 5 and 10
-	numPackets := randomInt(5, 10)
+	if peer.device.fakePackets == nil || len(peer.device.fakePackets) != 2 {
+		peer.device.fakePackets = []int{0, 0}
+	}
+	numPackets := randomInt(peer.device.fakePackets[0], peer.device.fakePackets[1])
 	for i := 0; i < numPackets; i++ {
 		// Generate a random packet size between 10 and 40 bytes
 		packetSize := randomInt(10, 40)
