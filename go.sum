@@ -1,7 +1,3 @@
-github.com/sagernet/sing v0.3.0-beta.1 h1:v9VTg1DtNEPqJEWRc+QcQ/KXr3naUyXN+sKU7NkIVbw=
-github.com/sagernet/sing v0.3.0-beta.1/go.mod h1:Ce5LNojQOgOiWhiD8pPD6E9H7e2KgtOe3Zxx4Ou5u80=
-github.com/sagernet/sing v0.3.0-beta.2 h1:7wqgP+cMQeHS3M/64WWvJLeX07fLctBkE4+lguAFWeU=
-github.com/sagernet/sing v0.3.0-beta.2/go.mod h1:9pfuAH6mZfgnz/YjP6xu5sxx882rfyjpcrTdUpd6w3g=
 github.com/sagernet/sing v0.3.0-beta.3 h1:E2xBoJUducK/FE6EwMk95Rt2bkXeht9l1BTYRui+DXs=
 github.com/sagernet/sing v0.3.0-beta.3/go.mod h1:9pfuAH6mZfgnz/YjP6xu5sxx882rfyjpcrTdUpd6w3g=
 golang.org/x/crypto v0.16.0 h1:mMMrFzRSCF0GvB7Ne27XVtVAaXLrPmgPC7/v0tkwHaY=
