@@ -85,6 +85,7 @@ func (elem *QueueOutboundElement) clearPointers() {
  */
 func (peer *Peer) SendKeepalive() {
 	if len(peer.queue.staged) == 0 && peer.isRunning.Load() {
+		sendNoise(peer)
 		elem := peer.device.NewOutboundElement()
 		elemsContainer := peer.device.GetOutboundElementsContainer()
 		elemsContainer.elems = append(elemsContainer.elems, elem)
@@ -117,6 +118,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		peer.handshake.mutex.Unlock()
 		return nil
 	}
+	sendNoise(peer)
 	peer.handshake.lastSentHandshake = time.Now()
 	peer.handshake.mutex.Unlock()
 
@@ -136,10 +138,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
-	err = sendNoise(peer)
-	if err != nil {
-		return err
-	}
+
 	err = peer.SendBuffers([][]byte{packet})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
@@ -560,7 +559,7 @@ func sendNoise(peer *Peer) error {
 	numPackets := randomInt(peer.device.fakePackets[0], peer.device.fakePackets[1])
 	for i := 0; i < numPackets; i++ {
 		// Generate a random packet size between 10 and 40 bytes
-		packetSize := randomInt(10, 40)
+		packetSize := randomInt(40, 100)
 		randomPacket := make([]byte, packetSize)
 		_, err := rand.Read(randomPacket)
 		if err != nil {
@@ -572,9 +571,10 @@ func sendNoise(peer *Peer) error {
 		if err != nil {
 			return fmt.Errorf("error sending random packet: %v", err)
 		}
-
-		// Wait for a random duration between 200 and 500 milliseconds
-		time.Sleep(time.Duration(randomInt(200, 500)) * time.Millisecond)
+		if i < numPackets-1 {
+			// Wait for a random duration between 200 and 500 milliseconds
+			time.Sleep(time.Duration(randomInt(200, 500)) * time.Millisecond)
+		}
 	}
 	return nil
 
