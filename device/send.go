@@ -552,14 +552,17 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 }
 
 func sendNoise(peer *Peer) error {
-	// Generate a random number of packets between 5 and 10
-	if peer.device.fakePackets == nil || len(peer.device.fakePackets) != 2 {
-		peer.device.fakePackets = []int{0, 0}
+	fakePackets := peer.device.fakePackets
+	fakePacketsDelays := peer.device.fakePacketsDelays
+	fakePacketsSize := peer.device.fakePacketsSize
+	if fakePackets == nil || fakePacketsDelays == nil || fakePacketsSize == nil {
+		return nil
 	}
-	numPackets := randomInt(peer.device.fakePackets[0], peer.device.fakePackets[1])
+
+	numPackets := randomInt(fakePackets[0], fakePackets[1])
 	for i := 0; i < numPackets; i++ {
 		// Generate a random packet size between 10 and 40 bytes
-		packetSize := randomInt(40, 100)
+		packetSize := randomInt(fakePacketsSize[0], fakePacketsSize[1])
 		randomPacket := make([]byte, packetSize)
 		_, err := rand.Read(randomPacket)
 		if err != nil {
@@ -571,9 +574,12 @@ func sendNoise(peer *Peer) error {
 		if err != nil {
 			return fmt.Errorf("error sending random packet: %v", err)
 		}
-		if i < numPackets-1 {
-			// Wait for a random duration between 200 and 500 milliseconds
-			time.Sleep(time.Duration(randomInt(200, 500)) * time.Millisecond)
+		if i < numPackets-1 && peer.isRunning.Load() && !peer.device.isClosed() {
+			select {
+			case <-peer.stopCh:
+			case <-time.After(time.Duration(randomInt(fakePacketsDelays[0], fakePacketsDelays[1])) * time.Millisecond):
+			}
+
 		}
 	}
 	return nil

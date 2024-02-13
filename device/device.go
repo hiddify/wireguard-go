@@ -86,10 +86,12 @@ type Device struct {
 		mtu    atomic.Int32
 	}
 
-	ipcMutex    sync.RWMutex
-	closed      chan struct{}
-	log         *Logger
-	fakePackets []int
+	ipcMutex          sync.RWMutex
+	closed            chan struct{}
+	log               *Logger
+	fakePackets       []int
+	fakePacketsDelays []int
+	fakePacketsSize   []int
 }
 
 // deviceState represents the state of a Device.
@@ -282,9 +284,11 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	return nil
 }
 
-func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int, fakePackets []int) *Device {
+func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int, fakePackets []int, fakePacketsSize []int, fakePacketsDelays []int) *Device {
 	device := new(Device)
 	device.fakePackets = fakePackets
+	device.fakePacketsDelays = fakePacketsDelays
+	device.fakePacketsSize = fakePacketsSize
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger
