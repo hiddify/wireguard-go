@@ -128,6 +128,9 @@ func (device *Device) isClosed() bool {
 func (device *Device) isUp() bool {
 	return device.deviceState() == deviceStateUp
 }
+func (device *Device) IsUp() bool {
+	return device.deviceState() == deviceStateUp
+}
 
 // Must hold device.peers.Lock()
 func removePeerLocked(device *Device, peer *Peer, key NoisePublicKey) {
