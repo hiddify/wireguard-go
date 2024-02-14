@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/sagernet/sing/common/atomic"
+	"github.com/sagernet/wireguard-go/hiddify"
 	"golang.org/x/sys/windows"
 )
 
@@ -330,6 +331,7 @@ func (l *pipeListener) makeConnectedServerPipe() (*file, error) {
 	// Wait for the client to connect.
 	ch := make(chan error)
 	go func(p *file) {
+		defer hiddify.NoCrash()
 		ch <- connectPipe(p)
 	}(p)
 
@@ -352,6 +354,7 @@ func (l *pipeListener) makeConnectedServerPipe() (*file, error) {
 }
 
 func (l *pipeListener) listenerRoutine() {
+	defer hiddify.NoCrash()
 	closed := false
 	for !closed {
 		select {

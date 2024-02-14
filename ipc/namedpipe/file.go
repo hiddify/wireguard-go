@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/sagernet/sing/common/atomic"
+	"github.com/sagernet/wireguard-go/hiddify"
 	"golang.org/x/sys/windows"
 )
 
@@ -124,6 +125,7 @@ func (f *file) prepareIo() (*ioOperation, error) {
 
 // ioCompletionProcessor processes completed async IOs forever
 func ioCompletionProcessor(h windows.Handle) {
+	defer hiddify.NoCrash()
 	for {
 		var bytes uint32
 		var key uintptr

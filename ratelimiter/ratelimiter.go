@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"sync"
 	"time"
+
+	"github.com/sagernet/wireguard-go/hiddify"
 )
 
 const (
@@ -62,6 +64,7 @@ func (rate *Ratelimiter) Init() {
 
 	// Start garbage collection routine.
 	go func() {
+		defer hiddify.NoCrash()
 		ticker := time.NewTicker(time.Second)
 		ticker.Stop()
 		for {

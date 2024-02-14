@@ -8,12 +8,14 @@ package device
 import (
 	"fmt"
 
+	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/tun"
 )
 
 const DefaultMTU = 1420
 
 func (device *Device) RoutineTUNEventReader() {
+	defer hiddify.NoCrash()
 	device.log.Verbosef("Routine: event worker - started")
 
 	for event := range device.tun.device.Events() {

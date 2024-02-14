@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/rwcancel"
 	"golang.org/x/sys/unix"
 )
@@ -47,6 +48,7 @@ func (device *Device) startRouteListener(bind conn.Bind) (*rwcancel.RWCancel, er
 }
 
 func (device *Device) routineRouteListener(bind conn.Bind, netlinkSock int, netlinkCancel *rwcancel.RWCancel) {
+	defer hiddify.NoCrash()
 	type peerEndpointPtr struct {
 		peer     *Peer
 		endpoint *conn.Endpoint
@@ -130,6 +132,7 @@ func (device *Device) routineRouteListener(bind conn.Bind, netlinkSock int, netl
 				reqPeer = make(map[uint32]peerEndpointPtr)
 				reqPeerLock.Unlock()
 				go func() {
+					defer hiddify.NoCrash()
 					device.peers.RLock()
 					i := uint32(1)
 					for _, peer := range device.peers.keyMap {

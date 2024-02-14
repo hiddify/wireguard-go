@@ -12,6 +12,7 @@ import (
 
 	"github.com/sagernet/sing/common/atomic"
 	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/ratelimiter"
 	"github.com/sagernet/wireguard-go/rwcancel"
 	"github.com/sagernet/wireguard-go/tun"
@@ -140,6 +141,7 @@ func removePeerLocked(device *Device, peer *Peer, key NoisePublicKey) {
 
 // changeState attempts to change the device state to match want.
 func (device *Device) changeState(want deviceState) (err error) {
+	defer hiddify.NoCrash()
 	device.state.Lock()
 	defer device.state.Unlock()
 	old := device.deviceState()
@@ -376,6 +378,7 @@ func (device *Device) RemoveAllPeers() {
 }
 
 func (device *Device) Close() {
+	defer hiddify.NoCrash()
 	device.ipcMutex.Lock()
 	defer device.ipcMutex.Unlock()
 	device.state.Lock()
@@ -444,6 +447,7 @@ func closeBindLocked(device *Device) error {
 }
 
 func (device *Device) Bind() conn.Bind {
+	defer hiddify.NoCrash()
 	device.net.Lock()
 	defer device.net.Unlock()
 	return device.net.bind
@@ -481,6 +485,7 @@ func (device *Device) BindSetMark(mark uint32) error {
 }
 
 func (device *Device) BindUpdate() error {
+	defer hiddify.NoCrash()
 	device.net.Lock()
 	defer device.net.Unlock()
 
@@ -545,6 +550,7 @@ func (device *Device) BindUpdate() error {
 }
 
 func (device *Device) BindClose() error {
+	defer hiddify.NoCrash()
 	device.net.Lock()
 	err := closeBindLocked(device)
 	device.net.Unlock()

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/rwcancel"
 	"golang.org/x/sys/unix"
 )
@@ -96,6 +97,7 @@ func UAPIListen(name string, file *os.File) (net.Listener, error) {
 	}
 
 	go func(l *UAPIListener) {
+		defer hiddify.NoCrash()
 		var buf [0]byte
 		for {
 			defer uapi.inotifyRWCancel.Close()
@@ -115,6 +117,7 @@ func UAPIListen(name string, file *os.File) (net.Listener, error) {
 	// watch for new connections
 
 	go func(l *UAPIListener) {
+		defer hiddify.NoCrash()
 		for {
 			conn, err := l.listener.Accept()
 			if err != nil {

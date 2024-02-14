@@ -19,6 +19,7 @@ import (
 	"math/big"
 
 	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/tun"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
@@ -215,6 +216,7 @@ func (peer *Peer) keepKeyFreshSending() {
 }
 
 func (device *Device) RoutineReadFromTUN() {
+	defer hiddify.NoCrash()
 	defer func() {
 		device.log.Verbosef("Routine: TUN reader - stopped")
 		device.state.stopping.Done()
@@ -448,6 +450,7 @@ func calculatePaddingSize(packetSize, mtu int) int {
  * Obs. One instance per core
  */
 func (device *Device) RoutineEncryption(id int) {
+	defer hiddify.NoCrash()
 	var paddingZeros [PaddingMultiple]byte
 	var nonce [chacha20poly1305.NonceSize]byte
 
@@ -486,6 +489,7 @@ func (device *Device) RoutineEncryption(id int) {
 }
 
 func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
+	defer hiddify.NoCrash()
 	device := peer.device
 	defer func() {
 		defer device.log.Verbosef("%v - Routine: sequential sender - stopped", peer)
