@@ -12,7 +12,6 @@ import (
 
 	"github.com/sagernet/sing/common/atomic"
 	"github.com/sagernet/wireguard-go/conn"
-	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/ratelimiter"
 	"github.com/sagernet/wireguard-go/rwcancel"
 	"github.com/sagernet/wireguard-go/tun"
@@ -93,6 +92,7 @@ type Device struct {
 	fakePackets       []int
 	fakePacketsDelays []int
 	fakePacketsSize   []int
+	stopCh            chan int //hiddify
 }
 
 // deviceState represents the state of a Device.
@@ -129,7 +129,7 @@ func (device *Device) isUp() bool {
 	return device.deviceState() == deviceStateUp
 }
 func (device *Device) IsUp() bool {
-	return device.deviceState() == deviceStateUp
+	return device.isUp()
 }
 
 // Must hold device.peers.Lock()
@@ -144,7 +144,7 @@ func removePeerLocked(device *Device, peer *Peer, key NoisePublicKey) {
 
 // changeState attempts to change the device state to match want.
 func (device *Device) changeState(want deviceState) (err error) {
-	defer hiddify.NoCrash()
+	defer NoCrash(device)
 	device.state.Lock()
 	defer device.state.Unlock()
 	old := device.deviceState()
@@ -298,6 +298,7 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int
 	device.closed = make(chan struct{})
 	device.log = logger
 	device.net.bind = bind
+	device.stopCh = make(chan int, 1) //hiddify
 	device.tun.device = tunDevice
 	mtu, err := device.tun.device.MTU()
 	if err != nil {
@@ -381,7 +382,7 @@ func (device *Device) RemoveAllPeers() {
 }
 
 func (device *Device) Close() {
-	defer hiddify.NoCrash()
+	defer NoCrash(device)
 	device.ipcMutex.Lock()
 	defer device.ipcMutex.Unlock()
 	device.state.Lock()
@@ -438,6 +439,10 @@ func (device *Device) SendKeepalivesToPeersWithCurrentKeypair() {
 // The caller must hold the net mutex.
 func closeBindLocked(device *Device) error {
 	var err error
+	select {
+	case device.stopCh <- 1:
+	default:
+	}
 	netc := &device.net
 	if netc.netlinkCancel != nil {
 		netc.netlinkCancel.Cancel()
@@ -450,7 +455,7 @@ func closeBindLocked(device *Device) error {
 }
 
 func (device *Device) Bind() conn.Bind {
-	defer hiddify.NoCrash()
+	defer NoCrash(device)
 	device.net.Lock()
 	defer device.net.Unlock()
 	return device.net.bind
@@ -488,7 +493,7 @@ func (device *Device) BindSetMark(mark uint32) error {
 }
 
 func (device *Device) BindUpdate() error {
-	defer hiddify.NoCrash()
+	defer NoCrash(device)
 	device.net.Lock()
 	defer device.net.Unlock()
 
@@ -499,6 +504,7 @@ func (device *Device) BindUpdate() error {
 
 	// open new sockets
 	if !device.isUp() {
+		device.log.Verbosef("Hiddify! device is not up so will not update")
 		return nil
 	}
 
@@ -547,13 +553,13 @@ func (device *Device) BindUpdate() error {
 	for _, fn := range recvFns {
 		go device.RoutineReceiveIncoming(batchSize, fn)
 	}
-
-	device.log.Verbosef("UDP bind has been updated")
+	
+	device.log.Verbosef("Hiddify! UDP bind has been updated")
 	return nil
 }
 
 func (device *Device) BindClose() error {
-	defer hiddify.NoCrash()
+	defer NoCrash(device)
 	device.net.Lock()
 	err := closeBindLocked(device)
 	device.net.Unlock()

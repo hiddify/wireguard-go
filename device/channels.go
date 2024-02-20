@@ -8,8 +8,6 @@ package device
 import (
 	"runtime"
 	"sync"
-
-	"github.com/sagernet/wireguard-go/hiddify"
 )
 
 // An outboundQueue is a channel of QueueOutboundElements awaiting encryption.
@@ -31,7 +29,7 @@ func newOutboundQueue() *outboundQueue {
 	}
 	q.wg.Add(1)
 	go func() {
-		defer hiddify.NoCrash()
+		defer NoCrash(nil)
 		q.wg.Wait()
 		close(q.c)
 	}()
@@ -50,7 +48,7 @@ func newInboundQueue() *inboundQueue {
 	}
 	q.wg.Add(1)
 	go func() {
-		defer hiddify.NoCrash()
+		defer NoCrash(nil)
 		q.wg.Wait()
 		close(q.c)
 	}()
@@ -69,7 +67,7 @@ func newHandshakeQueue() *handshakeQueue {
 	}
 	q.wg.Add(1)
 	go func() {
-		defer hiddify.NoCrash()
+		defer NoCrash(nil)
 		q.wg.Wait()
 		close(q.c)
 	}()

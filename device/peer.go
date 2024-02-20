@@ -53,8 +53,6 @@ type Peer struct {
 	cookieGenerator             CookieGenerator
 	trieEntries                 list.List
 	persistentKeepaliveInterval atomic.Uint32
-
-	stopCh chan int
 }
 
 func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
@@ -78,7 +76,6 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	peer := new(Peer)
 	peer.Lock()
 	defer peer.Unlock()
-	peer.stopCh = make(chan int, 1)
 
 	peer.cookieGenerator.Init(pk)
 	peer.device = device
@@ -257,7 +254,7 @@ func (peer *Peer) Stop() {
 		return
 	}
 	select {
-	case peer.stopCh <- 1:
+	case peer.device.stopCh <- 1:
 	default:
 	}
 	peer.device.log.Verbosef("%v - Stopping", peer)

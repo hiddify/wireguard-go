@@ -6,11 +6,7 @@ import (
 )
 
 func CrashHandle(f func()) {
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Println("Wireguard error!", r, string(debug.Stack()))
-		}
-	}()
+	defer NoCrash()
 	f()
 }
 
