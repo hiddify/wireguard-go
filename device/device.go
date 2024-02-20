@@ -6,6 +6,7 @@
 package device
 
 import (
+	"fmt"
 	"runtime"
 	"sync"
 	"time"
@@ -178,8 +179,8 @@ func (device *Device) changeState(want deviceState) (err error) {
 // The caller must hold device.state.mu and is responsible for updating device.state.state.
 func (device *Device) upLocked() error {
 	if err := device.BindUpdate(); err != nil {
-		device.log.Errorf("Unable to update bind: %v", err)
-		return err
+		device.log.Errorf("Hiddify! Unable to update bind: %v", err)
+		return fmt.Errorf("unable to update bind: %v", err)
 	}
 
 	// The IPC set operation waits for peers to be created before calling Start() on them,
@@ -451,6 +452,9 @@ func closeBindLocked(device *Device) error {
 		err = netc.bind.Close()
 	}
 	netc.stopping.Wait()
+	if err != nil {
+		return fmt.Errorf("closeBindLocked %v", err)
+	}
 	return err
 }
 
@@ -499,7 +503,7 @@ func (device *Device) BindUpdate() error {
 
 	// close existing sockets
 	if err := closeBindLocked(device); err != nil {
-		return err
+		return fmt.Errorf("Error in closing old bind %v", err)
 	}
 
 	// open new sockets
@@ -516,21 +520,22 @@ func (device *Device) BindUpdate() error {
 	recvFns, netc.port, err = netc.bind.Open(netc.port)
 	if err != nil {
 		netc.port = 0
-		return err
+		return fmt.Errorf("Error in opening new bind %v", err)
 	}
 
 	netc.netlinkCancel, err = device.startRouteListener(netc.bind)
 	if err != nil {
 		netc.bind.Close()
 		netc.port = 0
-		return err
+		return fmt.Errorf("Error in starting route listener %v", err)
 	}
 
 	// set fwmark
 	if netc.fwmark != 0 {
 		err = netc.bind.SetMark(netc.fwmark)
 		if err != nil {
-			return err
+			return fmt.Errorf("Error in setting mark %v", err)
+
 		}
 	}
 
@@ -553,7 +558,7 @@ func (device *Device) BindUpdate() error {
 	for _, fn := range recvFns {
 		go device.RoutineReceiveIncoming(batchSize, fn)
 	}
-	
+
 	device.log.Verbosef("Hiddify! UDP bind has been updated")
 	return nil
 }
