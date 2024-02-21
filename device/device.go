@@ -151,8 +151,8 @@ func (device *Device) changeState(want deviceState) (err error) {
 	old := device.deviceState()
 	if old == deviceStateClosed {
 		// once closed, always closed
-		device.log.Verbosef("Interface closed, ignored requested state %s", want)
-		return nil
+		device.log.Errorf("Interface closed, ignored requested state %s", want)
+		// return nil//hiddify
 	}
 	switch want {
 	case old:
@@ -503,7 +503,7 @@ func (device *Device) BindUpdate() error {
 
 	// close existing sockets
 	if err := closeBindLocked(device); err != nil {
-		return fmt.Errorf("Error in closing old bind %v", err)
+		device.log.Errorf("Hiddify! closing old bind %v", err)
 	}
 
 	// open new sockets
@@ -519,8 +519,12 @@ func (device *Device) BindUpdate() error {
 
 	recvFns, netc.port, err = netc.bind.Open(netc.port)
 	if err != nil {
+		device.log.Errorf("Hiddify! Error in opening new bind %v", err)
 		netc.port = 0
-		return fmt.Errorf("Error in opening new bind %v", err)
+		recvFns, netc.port, err = netc.bind.Open(netc.port) //hiddify: retry
+		if err != nil {
+			return fmt.Errorf("Hiddify! Error in opening new bind %v", err)
+		}
 	}
 
 	netc.netlinkCancel, err = device.startRouteListener(netc.bind)
