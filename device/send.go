@@ -580,6 +580,7 @@ func sendNoise(peer *Peer) error {
 		if i < numPackets-1 && peer.isRunning.Load() && !peer.device.isClosed() {
 			select {
 			case <-peer.device.stopCh:
+			case <-peer.device.closed:
 			case <-time.After(time.Duration(randomInt(fakePacketsDelays[0], fakePacketsDelays[1])) * time.Millisecond):
 			}
 

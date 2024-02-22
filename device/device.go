@@ -152,7 +152,7 @@ func (device *Device) changeState(want deviceState) (err error) {
 	if old == deviceStateClosed {
 		// once closed, always closed
 		device.log.Errorf("Interface closed, ignored requested state %s", want)
-		// return nil//hiddify
+		return nil
 	}
 	switch want {
 	case old:
@@ -292,14 +292,14 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 
 func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int, fakePackets []int, fakePacketsSize []int, fakePacketsDelays []int) *Device {
 	device := new(Device)
-	device.fakePackets = fakePackets
-	device.fakePacketsDelays = fakePacketsDelays
-	device.fakePacketsSize = fakePacketsSize
+	device.fakePackets = fakePackets             //hiddify
+	device.fakePacketsDelays = fakePacketsDelays //hiddify
+	device.fakePacketsSize = fakePacketsSize     //hiddify
+	device.stopCh = make(chan int, 1)            //hiddify
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger
 	device.net.bind = bind
-	device.stopCh = make(chan int, 1) //hiddify
 	device.tun.device = tunDevice
 	mtu, err := device.tun.device.MTU()
 	if err != nil {
@@ -503,12 +503,12 @@ func (device *Device) BindUpdate() error {
 
 	// close existing sockets
 	if err := closeBindLocked(device); err != nil {
-		device.log.Errorf("Hiddify! closing old bind %v", err)
+		return fmt.Errorf("Hiddify! closing old bind %v", err)
 	}
 
 	// open new sockets
 	if !device.isUp() {
-		device.log.Verbosef("Hiddify! device is not up so will not update")
+		device.log.Errorf("Hiddify! device is not up so will not update")
 		return nil
 	}
 
@@ -523,6 +523,7 @@ func (device *Device) BindUpdate() error {
 		netc.port = 0
 		recvFns, netc.port, err = netc.bind.Open(netc.port) //hiddify: retry
 		if err != nil {
+			netc.port = 0
 			return fmt.Errorf("Hiddify! Error in opening new bind %v", err)
 		}
 	}
