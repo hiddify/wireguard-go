@@ -85,7 +85,7 @@ func (elem *QueueOutboundElement) clearPointers() {
  */
 func (peer *Peer) SendKeepalive() {
 	if len(peer.queue.staged) == 0 && peer.isRunning.Load() {
-		sendNoise(peer)
+		peer.sendNoise()//Hiddify
 		elem := peer.device.NewOutboundElement()
 		elemsContainer := peer.device.GetOutboundElementsContainer()
 		elemsContainer.elems = append(elemsContainer.elems, elem)
@@ -118,7 +118,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		peer.handshake.mutex.Unlock()
 		return nil
 	}
-	sendNoise(peer)
+	
 	peer.handshake.lastSentHandshake = time.Now()
 	peer.handshake.mutex.Unlock()
 
@@ -138,7 +138,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
-
+	peer.sendNoise()//Hiddify
 	err = peer.SendBuffers([][]byte{packet})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
@@ -554,7 +554,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 	}
 }
 
-func sendNoise(peer *Peer) error {
+func (peer *Peer) sendNoise() error {
 	fakePackets := peer.device.fakePackets
 	fakePacketsDelays := peer.device.fakePacketsDelays
 	fakePacketsSize := peer.device.fakePacketsSize
@@ -565,15 +565,33 @@ func sendNoise(peer *Peer) error {
 	numPackets := randomInt(fakePackets[0], fakePackets[1])
 	for i := 0; i < numPackets; i++ {
 		// Generate a random packet size between 10 and 40 bytes
-		packetSize := randomInt(fakePacketsSize[0], fakePacketsSize[1])
-		randomPacket := make([]byte, packetSize)
-		_, err := rand.Read(randomPacket)
+		payloadSize := randomInt(fakePacketsSize[0], fakePacketsSize[1])
+		randomPayload := make([]byte, payloadSize)
+		_, err := rand.Read(randomPayload)
 		if err != nil {
 			return fmt.Errorf("error generating random packet: %v", err)
 		}
+		//{GFW-knocker
+		// clist := []byte{0xC0, 0xC2, 0xC3, 0xC4, 0xC9, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}
+		clist := []byte{0xDC, 0xDE, 0xD3, 0xD9, 0xD0, 0xEC, 0xEE, 0xE3}
 
+		a1 := clist[randomInt(0, len(clist)-1)]
+		a2 := []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
+		a3 := make([]byte, 8)
+		_, err3 := rand.Read(a3)
+		if err3 != nil {
+			return err3
+		}
+		a4 := []byte{0x00, 0x00, 0x44, 0xD0}
+
+		finalPacket := make([]byte, 0, payloadSize+18)
+		finalPacket = append(finalPacket, a2...)
+		finalPacket = append(finalPacket, a3...)
+		finalPacket = append(finalPacket, a4...)
+		finalPacket = append(finalPacket, randomPayload...)
+		//GFW-knocker}
 		// Send the random packet
-		err = peer.SendBuffers([][]byte{randomPacket})
+		err = peer.SendBuffersWithoutModify([][]byte{finalPacket})
 		if err != nil {
 			return fmt.Errorf("error sending random packet: %v", err)
 		}

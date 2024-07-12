@@ -342,6 +342,10 @@ func (e ErrUDPGSODisabled) Unwrap() error {
 	return e.RetryErr
 }
 
+func (s *StdNetBind) SendWithoutModify(bufs [][]byte, endpoint Endpoint) error {
+	return s.Send(bufs, endpoint)
+}
+
 func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint) error {
 	s.mu.Lock()
 	blackhole := s.blackhole4
