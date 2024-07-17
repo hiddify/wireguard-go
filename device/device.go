@@ -291,12 +291,9 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	return nil
 }
 
-func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int, fakePackets []int, fakePacketsSize []int, fakePacketsDelays []int) *Device {
+func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int) *Device {
 	device := new(Device)
-	device.fakePackets = fakePackets             //hiddify
-	device.fakePacketsDelays = fakePacketsDelays //hiddify
-	device.fakePacketsSize = fakePacketsSize     //hiddify
-	device.stopCh = make(chan int, 1)            //hiddify
+	device.stopCh = make(chan int, 1) //hiddify
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger

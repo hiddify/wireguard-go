@@ -601,7 +601,7 @@ func (peer *Peer) sendNoise() error {
 		if err != nil {
 			return fmt.Errorf("error generating random packet: %v", err)
 		}
-		mode = ToLower(mode)
+		
 		if mode == "" || mode == "m1" {
 			err = peer.SendBuffers([][]byte{randomPayload})
 		} else if mode == "m2" {
