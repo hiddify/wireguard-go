@@ -584,10 +584,10 @@ func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error 
 }
 
 func (peer *Peer) sendNoise() error {
-	fakePackets := peer.device.fakePackets
-	fakePacketsDelays := peer.device.fakePacketsDelays
-	fakePacketsSize := peer.device.fakePacketsSize
-	mode := strings.ToLower(peer.device.fakePacketsMode)
+	fakePackets := peer.device.FakePackets
+	fakePacketsDelays := peer.device.FakePacketsDelays
+	fakePacketsSize := peer.device.FakePacketsSize
+	mode := strings.ToLower(peer.device.FakePacketsMode)
 	if fakePackets == nil || fakePacketsDelays == nil || fakePacketsSize == nil {
 		return nil
 	}
@@ -601,7 +601,7 @@ func (peer *Peer) sendNoise() error {
 		if err != nil {
 			return fmt.Errorf("error generating random packet: %v", err)
 		}
-		
+
 		if mode == "" || mode == "m1" {
 			err = peer.SendBuffers([][]byte{randomPayload})
 		} else if mode == "m2" {

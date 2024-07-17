@@ -90,10 +90,10 @@ type Device struct {
 	ipcMutex          sync.RWMutex
 	closed            chan struct{}
 	log               *Logger
-	fakePackets       []int
-	fakePacketsDelays []int
-	fakePacketsSize   []int
-	fakePacketsMode   string
+	FakePackets       []int
+	FakePacketsDelays []int
+	FakePacketsSize   []int
+	FakePacketsMode   string
 	stopCh            chan int //hiddify
 }
 
