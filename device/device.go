@@ -93,6 +93,7 @@ type Device struct {
 	fakePackets       []int
 	fakePacketsDelays []int
 	fakePacketsSize   []int
+	fakePacketsMode   string
 	stopCh            chan int //hiddify
 }
 

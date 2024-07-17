@@ -11,6 +11,8 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,7 +87,7 @@ func (elem *QueueOutboundElement) clearPointers() {
  */
 func (peer *Peer) SendKeepalive() {
 	if len(peer.queue.staged) == 0 && peer.isRunning.Load() {
-		peer.sendNoise()//Hiddify
+		peer.sendNoise() //Hiddify
 		elem := peer.device.NewOutboundElement()
 		elemsContainer := peer.device.GetOutboundElementsContainer()
 		elemsContainer.elems = append(elemsContainer.elems, elem)
@@ -118,7 +120,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		peer.handshake.mutex.Unlock()
 		return nil
 	}
-	
+
 	peer.handshake.lastSentHandshake = time.Now()
 	peer.handshake.mutex.Unlock()
 
@@ -138,7 +140,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
-	peer.sendNoise()//Hiddify
+	peer.sendNoise() //Hiddify
 	err = peer.SendBuffers([][]byte{packet})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
@@ -554,10 +556,38 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 	}
 }
 
+func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error {
+	//{GFW-knocker
+
+	a1 := clist[randomInt(0, len(clist)-1)]
+	a2 := []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
+	a3 := make([]byte, 8)
+	_, err3 := rand.Read(a3)
+	if err3 != nil {
+		return err3
+	}
+	a4 := []byte{0x00, 0x00, 0x44, 0xD0}
+
+	finalPacket := make([]byte, 0, len(payload)+18)
+	finalPacket = append(finalPacket, a2...)
+	finalPacket = append(finalPacket, a3...)
+	finalPacket = append(finalPacket, a4...)
+	finalPacket = append(finalPacket, payload...)
+	//GFW-knocker}
+	// Send the random packet
+	if noModify {
+		return peer.SendBuffersWithoutModify([][]byte{finalPacket})
+	} else {
+		return peer.SendBuffers([][]byte{finalPacket})
+	}
+
+}
+
 func (peer *Peer) sendNoise() error {
 	fakePackets := peer.device.fakePackets
 	fakePacketsDelays := peer.device.fakePacketsDelays
 	fakePacketsSize := peer.device.fakePacketsSize
+	mode := strings.ToLower(peer.device.fakePacketsMode)
 	if fakePackets == nil || fakePacketsDelays == nil || fakePacketsSize == nil {
 		return nil
 	}
@@ -571,27 +601,42 @@ func (peer *Peer) sendNoise() error {
 		if err != nil {
 			return fmt.Errorf("error generating random packet: %v", err)
 		}
-		//{GFW-knocker
-		// clist := []byte{0xC0, 0xC2, 0xC3, 0xC4, 0xC9, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}
-		clist := []byte{0xDC, 0xDE, 0xD3, 0xD9, 0xD0, 0xEC, 0xEE, 0xE3}
-
-		a1 := clist[randomInt(0, len(clist)-1)]
-		a2 := []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
-		a3 := make([]byte, 8)
-		_, err3 := rand.Read(a3)
-		if err3 != nil {
-			return err3
+		mode = ToLower(mode)
+		if mode == "" || mode == "m1" {
+			err = peer.SendBuffers([][]byte{randomPayload})
+		} else if mode == "m2" {
+			err = peer.SendBuffersWithoutModify([][]byte{randomPayload})
+		} else if mode == "m3" {
+			// clist := []byte{0xC0, 0xC2, 0xC3, 0xC4, 0xC9, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}
+			clist := []byte{0xDC, 0xDE, 0xD3, 0xD9, 0xD0, 0xEC, 0xEE, 0xE3}
+			err = peer.customSend(clist, randomPayload, false)
+		} else if mode == "m4" {
+			// clist := []byte{0xC0, 0xC2, 0xC3, 0xC4, 0xC9, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}
+			clist := []byte{0xDC, 0xDE, 0xD3, 0xD9, 0xD0, 0xEC, 0xEE, 0xE3}
+			err = peer.customSend(clist, randomPayload, true)
+		} else if mode == "m5" {
+			clist := []byte{0xC0, 0xC2, 0xC3, 0xC4, 0xC9, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}
+			err = peer.customSend(clist, randomPayload, true)
+		} else if mode == "m6" {
+			clist := []byte{0x40, 0x42, 0x43, 0x44, 0x49, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F}
+			err = peer.customSend(clist, randomPayload, true)
+		} else if strings.HasPrefix(mode, "h") || strings.HasPrefix(mode, "g") {
+			clist := []byte{}
+			for i, x := range strings.Split(mode, "_") {
+				if i == 0 {
+					continue
+				}
+				byteValue, err := strconv.ParseUint(x, 16, 8)
+				if err != nil {
+					fmt.Println("Error parsing hex string:", err)
+					continue
+				}
+				clist = append(clist, byte(byteValue))
+			}
+			err = peer.customSend(clist, randomPayload, strings.HasPrefix(mode, "h"))
+		} else {
+			err = fmt.Errorf("incorrect packet mode: %s", mode)
 		}
-		a4 := []byte{0x00, 0x00, 0x44, 0xD0}
-
-		finalPacket := make([]byte, 0, payloadSize+18)
-		finalPacket = append(finalPacket, a2...)
-		finalPacket = append(finalPacket, a3...)
-		finalPacket = append(finalPacket, a4...)
-		finalPacket = append(finalPacket, randomPayload...)
-		//GFW-knocker}
-		// Send the random packet
-		err = peer.SendBuffersWithoutModify([][]byte{finalPacket})
 		if err != nil {
 			return fmt.Errorf("error sending random packet: %v", err)
 		}
