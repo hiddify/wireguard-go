@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing/common/atomic"
+
 	"github.com/sagernet/wireguard-go/conn"
 	"github.com/sagernet/wireguard-go/ratelimiter"
 	"github.com/sagernet/wireguard-go/rwcancel"
@@ -87,14 +88,15 @@ type Device struct {
 		mtu    atomic.Int32
 	}
 
-	ipcMutex          sync.RWMutex
-	closed            chan struct{}
-	log               *Logger
-	FakePackets       []int
-	FakePacketsDelays []int
-	FakePacketsSize   []int
-	FakePacketsMode   string
-	stopCh            chan int //hiddify
+	ipcMutex            sync.RWMutex
+	closed              chan struct{}
+	log                 *Logger
+	FakePackets         []int
+	FakePacketsDelays   []int
+	FakePacketsSize     []int
+	FakePacketsHeader   []byte
+	FakePacketsNoModify bool
+	stopCh              chan int //hiddify
 }
 
 // deviceState represents the state of a Device.

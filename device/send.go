@@ -11,8 +11,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -580,14 +578,12 @@ func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error 
 	} else {
 		return peer.SendBuffers([][]byte{finalPacket})
 	}
-
 }
 
 func (peer *Peer) sendNoise() error {
 	fakePackets := peer.device.FakePackets
 	fakePacketsDelays := peer.device.FakePacketsDelays
 	fakePacketsSize := peer.device.FakePacketsSize
-	mode := strings.ToLower(peer.device.FakePacketsMode)
 	if fakePackets == nil || fakePacketsDelays == nil || fakePacketsSize == nil {
 		return nil
 	}
@@ -601,42 +597,7 @@ func (peer *Peer) sendNoise() error {
 		if err != nil {
 			return fmt.Errorf("error generating random packet: %v", err)
 		}
-
-		if mode == "" || mode == "m1" {
-			err = peer.SendBuffers([][]byte{randomPayload})
-		} else if mode == "m2" {
-			err = peer.SendBuffersWithoutModify([][]byte{randomPayload})
-		} else if mode == "m3" {
-			// clist := []byte{0xC0, 0xC2, 0xC3, 0xC4, 0xC9, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}
-			clist := []byte{0xDC, 0xDE, 0xD3, 0xD9, 0xD0, 0xEC, 0xEE, 0xE3}
-			err = peer.customSend(clist, randomPayload, false)
-		} else if mode == "m4" {
-			// clist := []byte{0xC0, 0xC2, 0xC3, 0xC4, 0xC9, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}
-			clist := []byte{0xDC, 0xDE, 0xD3, 0xD9, 0xD0, 0xEC, 0xEE, 0xE3}
-			err = peer.customSend(clist, randomPayload, true)
-		} else if mode == "m5" {
-			clist := []byte{0xC0, 0xC2, 0xC3, 0xC4, 0xC9, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF}
-			err = peer.customSend(clist, randomPayload, true)
-		} else if mode == "m6" {
-			clist := []byte{0x40, 0x42, 0x43, 0x44, 0x49, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F}
-			err = peer.customSend(clist, randomPayload, true)
-		} else if strings.HasPrefix(mode, "h") || strings.HasPrefix(mode, "g") {
-			clist := []byte{}
-			for i, x := range strings.Split(mode, "_") {
-				if i == 0 {
-					continue
-				}
-				byteValue, err := strconv.ParseUint(x, 16, 8)
-				if err != nil {
-					fmt.Println("Error parsing hex string:", err)
-					continue
-				}
-				clist = append(clist, byte(byteValue))
-			}
-			err = peer.customSend(clist, randomPayload, strings.HasPrefix(mode, "h"))
-		} else {
-			err = fmt.Errorf("incorrect packet mode: %s", mode)
-		}
+		peer.customSend(peer.device.FakePacketsHeader, randomPayload, peer.device.FakePacketsNoModify)
 		if err != nil {
 			return fmt.Errorf("error sending random packet: %v", err)
 		}
