@@ -556,9 +556,13 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 
 func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error {
 	//{GFW-knocker
-
-	a1 := clist[randomInt(0, len(clist)-1)]
-	a2 := []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
+	var a2 []byte
+	if len(clist)>0{
+		a1 := clist[randomInt(0, len(clist)-1)]
+		a2 = []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
+	}else{
+		a2 = []byte{0x00, 0x00, 0x00, 0x01, 0x08}
+	}
 	a3 := make([]byte, 8)
 	_, err3 := rand.Read(a3)
 	if err3 != nil {
@@ -566,7 +570,7 @@ func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error 
 	}
 	a4 := []byte{0x00, 0x00, 0x44, 0xD0}
 
-	finalPacket := make([]byte, 0, len(payload)+18)
+	finalPacket := make([]byte, 0, len(payload)+len(a2)+len(a3)+len(a4))
 	finalPacket = append(finalPacket, a2...)
 	finalPacket = append(finalPacket, a3...)
 	finalPacket = append(finalPacket, a4...)
