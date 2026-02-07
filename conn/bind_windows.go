@@ -533,7 +533,7 @@ func (bind *afWinRingBind) Send(buf []byte, nend *WinRingEndpoint, isOpen *atomi
 	return winrio.SendEx(bind.rq, dataBuffer, 1, nil, addressBuffer, nil, nil, 0, 0)
 }
 
-func (bind *WinRingBind) SendWithoutModifySend(bufs [][]byte, endpoint Endpoint, offset int) error {
+func (bind *WinRingBind) SendWithoutModify(bufs [][]byte, endpoint Endpoint, offset int) error {
 	nend, ok := endpoint.(*WinRingEndpoint)
 	if !ok {
 		return ErrWrongEndpointType
