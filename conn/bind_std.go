@@ -39,6 +39,8 @@ type StdNetBind struct {
 	ipv6          *net.UDPConn
 	ipv4PC        *ipv4.PacketConn // will be nil on non-Linux
 	ipv6PC        *ipv6.PacketConn // will be nil on non-Linux
+	ipv4RC        syscall.RawConn  // will be nil on non-Darwin
+	ipv6RC        syscall.RawConn  // will be nil on non-Darwin
 	ipv4TxOffload bool
 	ipv4RxOffload bool
 	ipv6TxOffload bool
@@ -47,6 +49,8 @@ type StdNetBind struct {
 	// these two fields are not guarded by mu
 	udpAddrPool sync.Pool
 	msgsPool    sync.Pool
+
+	msgx msgXState
 
 	blackhole4 bool
 	blackhole6 bool
@@ -175,6 +179,7 @@ func (s *StdNetBind) Open(uport uint16) ([]ReceiveFunc, uint16, error) {
 	if s.ipv4 != nil || s.ipv6 != nil {
 		return nil, 0, ErrBindAlreadyOpen
 	}
+	s.msgx.reset()
 
 	// Attempt to open ipv4 and ipv6 listeners on the same port.
 	// If uport is 0, we can retry on failure.
@@ -207,7 +212,22 @@ again:
 			v4pc = ipv4.NewPacketConn(v4conn)
 			s.ipv4PC = v4pc
 		}
-		fns = append(fns, s.makeReceiveIPv4(v4pc, v4conn, s.ipv4RxOffload))
+		if supportsMsgX {
+			var receiveFn ReceiveFunc
+			receiveFn, err = s.makeReceiveMsgX(v4conn, false)
+			if err != nil {
+				v4conn.Close()
+				return nil, 0, err
+			}
+			s.ipv4RC, err = v4conn.SyscallConn()
+			if err != nil {
+				v4conn.Close()
+				return nil, 0, err
+			}
+			fns = append(fns, receiveFn)
+		} else {
+			fns = append(fns, s.makeReceiveIPv4(v4pc, v4conn, s.ipv4RxOffload))
+		}
 		s.ipv4 = v4conn
 	}
 	if v6conn != nil {
@@ -216,7 +236,22 @@ again:
 			v6pc = ipv6.NewPacketConn(v6conn)
 			s.ipv6PC = v6pc
 		}
-		fns = append(fns, s.makeReceiveIPv6(v6pc, v6conn, s.ipv6RxOffload))
+		if supportsMsgX {
+			var receiveFn ReceiveFunc
+			receiveFn, err = s.makeReceiveMsgX(v6conn, true)
+			if err != nil {
+				v6conn.Close()
+				return nil, 0, err
+			}
+			s.ipv6RC, err = v6conn.SyscallConn()
+			if err != nil {
+				v6conn.Close()
+				return nil, 0, err
+			}
+			fns = append(fns, receiveFn)
+		} else {
+			fns = append(fns, s.makeReceiveIPv6(v6pc, v6conn, s.ipv6RxOffload))
+		}
 		s.ipv6 = v6conn
 	}
 	if len(fns) == 0 {
@@ -325,6 +360,9 @@ func (s *StdNetBind) makeReceiveIPv6(pc *ipv6.PacketConn, conn *net.UDPConn, rxO
 func (s *StdNetBind) BatchSize() int {
 	if runtime.GOOS == "linux" || runtime.GOOS == "android" {
 		return IdealBatchSize
+	}
+	if supportsMsgX {
+		return msgXBatchSize
 	}
 	return 1
 }
@@ -467,6 +505,12 @@ func (s *StdNetBind) send(conn *net.UDPConn, pc batchWriter, msgs []ipv6.Message
 			start += n
 		}
 	} else {
+		if supportsMsgX {
+			handled, sendErr := s.sendMsgX(conn, msgs)
+			if handled {
+				return sendErr
+			}
+		}
 		for _, msg := range msgs {
 			_, _, err = conn.WriteMsgUDP(msg.Buffers[0], msg.OOB, msg.Addr.(*net.UDPAddr))
 			if err != nil {
