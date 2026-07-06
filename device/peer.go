@@ -25,6 +25,8 @@ type Peer struct {
 	rxBytes           atomic.Uint64  // bytes received from peer
 	lastHandshakeNano atomic.Int64   // nano seconds since epoch
 
+	queuedOutboundPackets atomic.Int32 // packets in staged+outbound queues, for input backpressure
+
 	endpoint struct {
 		sync.Mutex
 		val            conn.Endpoint
@@ -193,6 +195,7 @@ func (peer *Peer) Start() {
 	// reset routine state
 	peer.stopping.Wait()
 	peer.stopping.Add(2)
+	peer.queuedOutboundPackets.Store(0)
 
 	peer.handshake.mutex.Lock()
 	peer.handshake.lastSentHandshake = time.Now().Add(-(RekeyTimeout + time.Second))

@@ -45,7 +45,7 @@ import (
  */
 
 type QueueOutboundElement struct {
-	buffer *[MaxMessageSize]byte // slice holding the packet data
+	buffer []byte // sing-allocated buffer holding the packet data
 	// packet is always a slice of "buffer". The starting offset in buffer
 	// is either:
 	//  a) MessageEncapsulatingTransportSize+MessageTransportHeaderSize (plaintext)
@@ -63,7 +63,7 @@ type QueueOutboundElementsContainer struct {
 
 func (device *Device) NewOutboundElement() *QueueOutboundElement {
 	elem := device.GetOutboundElement()
-	elem.buffer = device.GetMessageBuffer()
+	elem.buffer = device.GetOutboundBuffer(MaxMessageSize)
 	elem.nonce = 0
 	// keypair and peer were cleared (if necessary) by clearPointers.
 	return elem
@@ -89,9 +89,10 @@ func (peer *Peer) SendKeepalive() {
 		elemsContainer.elems = append(elemsContainer.elems, elem)
 		select {
 		case peer.queue.staged <- elemsContainer:
+			peer.queuedOutboundPackets.Add(1)
 			peer.device.log.Verbosef("%v - Sending keepalive packet", peer)
 		default:
-			peer.device.PutMessageBuffer(elem.buffer)
+			peer.device.PutOutboundBuffer(elem.buffer)
 			peer.device.PutOutboundElement(elem)
 			peer.device.PutOutboundElementsContainer(elemsContainer)
 		}
@@ -238,7 +239,7 @@ func (device *Device) RoutineReadFromTUN() {
 	defer func() {
 		for _, elem := range elems {
 			if elem != nil {
-				device.PutMessageBuffer(elem.buffer)
+				device.PutOutboundBuffer(elem.buffer)
 				device.PutOutboundElement(elem)
 			}
 		}
@@ -295,7 +296,7 @@ func (device *Device) RoutineReadFromTUN() {
 				peer.SendStagedPackets()
 			} else {
 				for _, elem := range elemsForPeer.elems {
-					device.PutMessageBuffer(elem.buffer)
+					device.PutOutboundBuffer(elem.buffer)
 					device.PutOutboundElement(elem)
 				}
 				device.PutOutboundElementsContainer(elemsForPeer)
@@ -322,22 +323,33 @@ func (device *Device) RoutineReadFromTUN() {
 	}
 }
 
+// maxQueuedInputPackets bounds the staged+outbound backlog of a peer fed via
+// InputPacket/InputPackets. Injected packets beyond it are dropped before they
+// are copied into pooled message buffers, like a full qdisc: injection has no
+// flow control, and the queues are bounded in containers (up to a full batch
+// each), so without this cap a flood is buffered instead of dropped.
+const maxQueuedInputPackets = 2048
+
 func (device *Device) InputPacket(destination []byte, packetSlices [][]byte) {
 	peer := device.allowedips.Lookup(destination)
 	if peer == nil {
 		return
 	}
-	elem := device.NewOutboundElement()
-	packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
+	if peer.queuedOutboundPackets.Load() >= maxQueuedInputPackets {
+		return
+	}
 	var totalLength int
 	for _, packetSlice := range packetSlices {
 		totalLength += len(packetSlice)
 	}
-	if totalLength > len(packet) {
-		device.PutMessageBuffer(elem.buffer)
-		device.PutOutboundElement(elem)
+	allocLength := MessageEncapsulatingTransportSize + MessageTransportHeaderSize + totalLength + PaddingMultiple + chacha20poly1305.Overhead
+	if allocLength > MaxMessageSize {
 		return
 	}
+	elem := device.GetOutboundElement()
+	elem.buffer = device.GetOutboundBuffer(allocLength)
+	elem.nonce = 0
+	packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
 	var n int
 	for _, packetSlice := range packetSlices {
 		n += copy(packet[n:], packetSlice)
@@ -349,7 +361,7 @@ func (device *Device) InputPacket(destination []byte, packetSlices [][]byte) {
 		peer.StagePackets(elemsForPeer)
 		peer.SendStagedPackets()
 	} else {
-		device.PutMessageBuffer(elem.buffer)
+		device.PutOutboundBuffer(elem.buffer)
 		device.PutOutboundElement(elem)
 		device.PutOutboundElementsContainer(elemsForPeer)
 	}
@@ -369,17 +381,21 @@ func (device *Device) InputPackets(packets []*InputPacketRef) []*InputPacketRef 
 			unmatched = append(unmatched, packetRef)
 			continue
 		}
-		elem := device.NewOutboundElement()
-		packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
+		if peer.queuedOutboundPackets.Load() >= maxQueuedInputPackets {
+			continue
+		}
 		var totalLength int
 		for _, packetSlice := range packetRef.PacketSlices {
 			totalLength += len(packetSlice)
 		}
-		if totalLength > len(packet) {
-			device.PutMessageBuffer(elem.buffer)
-			device.PutOutboundElement(elem)
+		allocLength := MessageEncapsulatingTransportSize + MessageTransportHeaderSize + totalLength + PaddingMultiple + chacha20poly1305.Overhead
+		if allocLength > MaxMessageSize {
 			continue
 		}
+		elem := device.GetOutboundElement()
+		elem.buffer = device.GetOutboundBuffer(allocLength)
+		elem.nonce = 0
+		packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
 		var n int
 		for _, packetSlice := range packetRef.PacketSlices {
 			n += copy(packet[n:], packetSlice)
@@ -398,7 +414,7 @@ func (device *Device) InputPackets(packets []*InputPacketRef) []*InputPacketRef 
 			peer.SendStagedPackets()
 		} else {
 			for _, elem := range elemsForPeer.elems {
-				device.PutMessageBuffer(elem.buffer)
+				device.PutOutboundBuffer(elem.buffer)
 				device.PutOutboundElement(elem)
 			}
 			device.PutOutboundElementsContainer(elemsForPeer)
@@ -408,6 +424,7 @@ func (device *Device) InputPackets(packets []*InputPacketRef) []*InputPacketRef 
 }
 
 func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) {
+	peer.queuedOutboundPackets.Add(int32(len(elems.elems)))
 	for {
 		select {
 		case peer.queue.staged <- elems:
@@ -416,8 +433,9 @@ func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) {
 		}
 		select {
 		case tooOld := <-peer.queue.staged:
+			peer.queuedOutboundPackets.Add(-int32(len(tooOld.elems)))
 			for _, elem := range tooOld.elems {
-				peer.device.PutMessageBuffer(elem.buffer)
+				peer.device.PutOutboundBuffer(elem.buffer)
 				peer.device.PutOutboundElement(elem)
 			}
 			peer.device.PutOutboundElementsContainer(tooOld)
@@ -464,6 +482,8 @@ top:
 			elemsContainer.elems = elemsContainer.elems[:i]
 
 			if elemsContainerOOO != nil {
+				// Already counted at their original staging; StagePackets will count them again.
+				peer.queuedOutboundPackets.Add(-int32(len(elemsContainerOOO.elems)))
 				peer.StagePackets(elemsContainerOOO) // XXX: Out of order, but we can't front-load go chans
 			}
 
@@ -477,8 +497,9 @@ top:
 				peer.queue.outbound.c <- elemsContainer
 				peer.device.queue.encryption.c <- elemsContainer
 			} else {
+				peer.queuedOutboundPackets.Add(-int32(len(elemsContainer.elems)))
 				for _, elem := range elemsContainer.elems {
-					peer.device.PutMessageBuffer(elem.buffer)
+					peer.device.PutOutboundBuffer(elem.buffer)
 					peer.device.PutOutboundElement(elem)
 				}
 				peer.device.PutOutboundElementsContainer(elemsContainer)
@@ -497,8 +518,9 @@ func (peer *Peer) FlushStagedPackets() {
 	for {
 		select {
 		case elemsContainer := <-peer.queue.staged:
+			peer.queuedOutboundPackets.Add(-int32(len(elemsContainer.elems)))
 			for _, elem := range elemsContainer.elems {
-				peer.device.PutMessageBuffer(elem.buffer)
+				peer.device.PutOutboundBuffer(elem.buffer)
 				peer.device.PutOutboundElement(elem)
 			}
 			peer.device.PutOutboundElementsContainer(elemsContainer)
@@ -592,8 +614,9 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 			// TODO: rework peer shutdown order to ensure
 			// that we never accidentally keep timers alive longer than necessary.
 			elemsContainer.Lock()
+			peer.queuedOutboundPackets.Add(-int32(len(elemsContainer.elems)))
 			for _, elem := range elemsContainer.elems {
-				device.PutMessageBuffer(elem.buffer)
+				device.PutOutboundBuffer(elem.buffer)
 				device.PutOutboundElement(elem)
 			}
 			device.PutOutboundElementsContainer(elemsContainer)
@@ -615,8 +638,9 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		if dataSent {
 			peer.timersDataSent()
 		}
+		peer.queuedOutboundPackets.Add(-int32(len(elemsContainer.elems)))
 		for _, elem := range elemsContainer.elems {
-			device.PutMessageBuffer(elem.buffer)
+			device.PutOutboundBuffer(elem.buffer)
 			device.PutOutboundElement(elem)
 		}
 		device.PutOutboundElementsContainer(elemsContainer)

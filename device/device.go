@@ -71,11 +71,11 @@ type Device struct {
 	cookieChecker CookieChecker
 
 	pool struct {
-		inboundElementsContainer  *WaitPool
-		outboundElementsContainer *WaitPool
+		inboundElementsContainer  *sync.Pool
+		outboundElementsContainer *sync.Pool
 		messageBuffers            *WaitPool
-		inboundElements           *WaitPool
-		outboundElements          *WaitPool
+		inboundElements           *sync.Pool
+		outboundElements          *sync.Pool
 	}
 
 	queue struct {
