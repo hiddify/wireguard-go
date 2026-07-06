@@ -329,6 +329,15 @@ func (device *Device) InputPacket(destination []byte, packetSlices [][]byte) {
 	}
 	elem := device.NewOutboundElement()
 	packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
+	var totalLength int
+	for _, packetSlice := range packetSlices {
+		totalLength += len(packetSlice)
+	}
+	if totalLength > len(packet) {
+		device.PutMessageBuffer(elem.buffer)
+		device.PutOutboundElement(elem)
+		return
+	}
 	var n int
 	for _, packetSlice := range packetSlices {
 		n += copy(packet[n:], packetSlice)
@@ -344,6 +353,58 @@ func (device *Device) InputPacket(destination []byte, packetSlices [][]byte) {
 		device.PutOutboundElement(elem)
 		device.PutOutboundElementsContainer(elemsForPeer)
 	}
+}
+
+type InputPacketRef struct {
+	Destination  []byte
+	PacketSlices [][]byte
+}
+
+func (device *Device) InputPackets(packets []*InputPacketRef) []*InputPacketRef {
+	var unmatched []*InputPacketRef
+	elemsByPeer := make(map[*Peer]*QueueOutboundElementsContainer, len(packets))
+	for _, packetRef := range packets {
+		peer := device.allowedips.Lookup(packetRef.Destination)
+		if peer == nil {
+			unmatched = append(unmatched, packetRef)
+			continue
+		}
+		elem := device.NewOutboundElement()
+		packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
+		var totalLength int
+		for _, packetSlice := range packetRef.PacketSlices {
+			totalLength += len(packetSlice)
+		}
+		if totalLength > len(packet) {
+			device.PutMessageBuffer(elem.buffer)
+			device.PutOutboundElement(elem)
+			continue
+		}
+		var n int
+		for _, packetSlice := range packetRef.PacketSlices {
+			n += copy(packet[n:], packetSlice)
+		}
+		elem.packet = packet[:n]
+		elemsForPeer, ok := elemsByPeer[peer]
+		if !ok {
+			elemsForPeer = device.GetOutboundElementsContainer()
+			elemsByPeer[peer] = elemsForPeer
+		}
+		elemsForPeer.elems = append(elemsForPeer.elems, elem)
+	}
+	for peer, elemsForPeer := range elemsByPeer {
+		if peer.isRunning.Load() {
+			peer.StagePackets(elemsForPeer)
+			peer.SendStagedPackets()
+		} else {
+			for _, elem := range elemsForPeer.elems {
+				device.PutMessageBuffer(elem.buffer)
+				device.PutOutboundElement(elem)
+			}
+			device.PutOutboundElementsContainer(elemsForPeer)
+		}
+	}
+	return unmatched
 }
 
 func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) {
