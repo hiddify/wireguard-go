@@ -408,6 +408,13 @@ func (e ErrUDPGSODisabled) Unwrap() error {
 }
 
 func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
+	for len(bufs) > IdealBatchSize {
+		err := s.Send(bufs[:IdealBatchSize], endpoint, offset)
+		if err != nil {
+			return err
+		}
+		bufs = bufs[IdealBatchSize:]
+	}
 	s.mu.Lock()
 	blackhole := s.blackhole4
 	conn := s.ipv4
