@@ -228,8 +228,11 @@ again:
 
 func (s *StdNetBind) putMessages(msgs *[]ipv6.Message) {
 	for i := range *msgs {
-		(*msgs)[i].OOB = (*msgs)[i].OOB[:0]
-		(*msgs)[i] = ipv6.Message{Buffers: (*msgs)[i].Buffers, OOB: (*msgs)[i].OOB}
+		buffers := (*msgs)[i].Buffers
+		for j := range buffers {
+			buffers[j] = nil
+		}
+		(*msgs)[i] = ipv6.Message{Buffers: buffers[:1], OOB: (*msgs)[i].OOB[:0]}
 	}
 	s.msgsPool.Put(msgs)
 }
@@ -491,6 +494,7 @@ func coalesceMessages(addr *net.UDPAddr, ep *StdNetEndpoint, bufs [][]byte, offs
 	var (
 		base     = -1 // index of msg we are currently coalescing into
 		gsoSize  int  // segmentation size of msgs[base]
+		totalLen int  // length of all dgrams coalesced into msgs[base]
 		dgramCnt int  // number of dgrams coalesced into msgs[base]
 		endBatch bool // tracking flag to start a new batch on next iteration of bufs
 	)
@@ -502,14 +506,14 @@ func coalesceMessages(addr *net.UDPAddr, ep *StdNetEndpoint, bufs [][]byte, offs
 		buf = buf[offset:]
 		if i > 0 {
 			msgLen := len(buf)
-			baseLenBefore := len(msgs[base].Buffers[0])
-			freeBaseCap := cap(msgs[base].Buffers[0]) - baseLenBefore
-			if msgLen+baseLenBefore <= maxPayloadLen &&
+			if msgLen+totalLen <= maxPayloadLen &&
 				msgLen <= gsoSize &&
-				msgLen <= freeBaseCap &&
 				dgramCnt < udpSegmentMaxDatagrams &&
 				!endBatch {
-				msgs[base].Buffers[0] = append(msgs[base].Buffers[0], buf...)
+				// Coalesce as an additional iovec instead of copying: element
+				// buffers are sized to their packet and have no spare capacity.
+				msgs[base].Buffers = append(msgs[base].Buffers, buf)
+				totalLen += msgLen
 				if i == len(bufs)-1 {
 					setGSO(&msgs[base].OOB, uint16(gsoSize))
 				}
@@ -530,8 +534,9 @@ func coalesceMessages(addr *net.UDPAddr, ep *StdNetEndpoint, bufs [][]byte, offs
 		endBatch = false
 		base++
 		gsoSize = len(buf)
+		totalLen = len(buf)
 		setSrcControl(&msgs[base].OOB, ep)
-		msgs[base].Buffers[0] = buf
+		msgs[base].Buffers = append(msgs[base].Buffers[:0], buf)
 		msgs[base].Addr = addr
 		dgramCnt = 1
 	}
