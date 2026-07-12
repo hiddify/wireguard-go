@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package conn
@@ -531,41 +531,6 @@ func (bind *afWinRingBind) Send(buf []byte, nend *WinRingEndpoint, isOpen *atomi
 	bind.mu.Lock()
 	defer bind.mu.Unlock()
 	return winrio.SendEx(bind.rq, dataBuffer, 1, nil, addressBuffer, nil, nil, 0, 0)
-}
-
-func (bind *WinRingBind) SendWithoutModify(bufs [][]byte, endpoint Endpoint, offset int) error {
-	nend, ok := endpoint.(*WinRingEndpoint)
-	if !ok {
-		return ErrWrongEndpointType
-	}
-	bind.mu.RLock()
-	defer bind.mu.RUnlock()
-	for _, buf := range bufs {
-		buf = buf[offset:]
-		if false && len(buf) > 3 {
-			reserved, loaded := bind.reservedForEndpoint[*endpoint.(*WinRingEndpoint)]
-			if loaded {
-				copy(buf[1:4], reserved[:])
-			}
-		}
-		switch nend.family {
-		case windows.AF_INET:
-			if bind.v4.blackhole {
-				continue
-			}
-			if err := bind.v4.Send(buf, nend, &bind.isOpen); err != nil {
-				return err
-			}
-		case windows.AF_INET6:
-			if bind.v6.blackhole {
-				continue
-			}
-			if err := bind.v6.Send(buf, nend, &bind.isOpen); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func (bind *WinRingBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {

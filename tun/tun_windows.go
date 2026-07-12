@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package tun
@@ -160,11 +160,10 @@ retry:
 		packet, err := tun.session.ReceivePacket()
 		switch err {
 		case nil:
-			packetSize := len(packet)
-			copy(bufs[0][offset:], packet)
-			sizes[0] = packetSize
+			n := copy(bufs[0][offset:], packet)
+			sizes[0] = n
 			tun.session.ReleaseReceivePacket(packet)
-			tun.rate.update(uint64(packetSize))
+			tun.rate.update(uint64(n))
 			return 1, nil
 		case windows.ERROR_NO_MORE_ITEMS:
 			if !shouldSpin || uint64(nanotime()-start) >= spinloopDuration {

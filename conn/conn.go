@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 // Package conn implements WireGuard's network connections.
@@ -50,8 +50,6 @@ type Bind interface {
 	// element of the bufs slice. Space preceding offset is free to use for
 	// additional encapsulation. The length of bufs must not exceed BatchSize().
 	Send(bufs [][]byte, ep Endpoint, offset int) error
-
-	SendWithoutModify(bufs [][]byte, ep Endpoint, offset int) error //Hiddify-GFW-knocker
 
 	// ParseEndpoint creates a new endpoint from a string.
 	ParseEndpoint(s string) (Endpoint, error)

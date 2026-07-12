@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -24,6 +24,8 @@ type Peer struct {
 	txBytes           atomic.Uint64  // bytes send to peer (endpoint)
 	rxBytes           atomic.Uint64  // bytes received from peer
 	lastHandshakeNano atomic.Int64   // nano seconds since epoch
+
+	queuedOutboundPackets atomic.Int32 // packets in staged+outbound queues, for input backpressure
 
 	endpoint struct {
 		sync.Mutex
@@ -113,37 +115,6 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	return peer, nil
 }
 
-func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error {
-	peer.device.net.RLock()
-	defer peer.device.net.RUnlock()
-
-	if peer.device.isClosed() {
-		return nil
-	}
-
-	peer.endpoint.Lock()
-	endpoint := peer.endpoint.val
-	if endpoint == nil {
-		peer.endpoint.Unlock()
-		return errors.New("no known endpoint for peer")
-	}
-	if peer.endpoint.clearSrcOnTx {
-		endpoint.ClearSrc()
-		peer.endpoint.clearSrcOnTx = false
-	}
-	peer.endpoint.Unlock()
-	//Hiddify-GFW-knocker
-	err := peer.device.net.bind.SendWithoutModify(buffers, endpoint, MessageEncapsulatingTransportSize)
-	if err == nil {
-		var totalLen uint64
-		for _, b := range buffers {
-			totalLen += uint64(len(b))
-		}
-		peer.txBytes.Add(totalLen)
-	}
-	return err
-}
-
 // SendBuffers sends buffers to peer. WireGuard packet data in each element of
 // buffers must be preceded by MessageEncapsulatingTransportSize number of
 // bytes.
@@ -224,6 +195,7 @@ func (peer *Peer) Start() {
 	// reset routine state
 	peer.stopping.Wait()
 	peer.stopping.Add(2)
+	peer.queuedOutboundPackets.Store(0)
 
 	peer.handshake.mutex.Lock()
 	peer.handshake.lastSentHandshake = time.Now().Add(-(RekeyTimeout + time.Second))
@@ -293,10 +265,7 @@ func (peer *Peer) ExpireCurrentKeypairs() {
 func (peer *Peer) Stop() {
 	peer.state.Lock()
 	defer peer.state.Unlock()
-	select {
-	case peer.device.stopCh <- 1: //H
-	default:
-	}
+
 	if !peer.isRunning.Swap(false) {
 		return
 	}

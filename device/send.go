@@ -1,22 +1,19 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/sagernet/wireguard-go/conn"
-	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/tun"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
@@ -48,7 +45,7 @@ import (
  */
 
 type QueueOutboundElement struct {
-	buffer *[MaxMessageSize]byte // slice holding the packet data
+	buffer []byte // sing-allocated buffer holding the packet data
 	// packet is always a slice of "buffer". The starting offset in buffer
 	// is either:
 	//  a) MessageEncapsulatingTransportSize+MessageTransportHeaderSize (plaintext)
@@ -66,7 +63,7 @@ type QueueOutboundElementsContainer struct {
 
 func (device *Device) NewOutboundElement() *QueueOutboundElement {
 	elem := device.GetOutboundElement()
-	elem.buffer = device.GetMessageBuffer()
+	elem.buffer = device.GetOutboundBuffer(MaxMessageSize)
 	elem.nonce = 0
 	// keypair and peer were cleared (if necessary) by clearPointers.
 	return elem
@@ -92,9 +89,10 @@ func (peer *Peer) SendKeepalive() {
 		elemsContainer.elems = append(elemsContainer.elems, elem)
 		select {
 		case peer.queue.staged <- elemsContainer:
+			peer.queuedOutboundPackets.Add(1)
 			peer.device.log.Verbosef("%v - Sending keepalive packet", peer)
 		default:
-			peer.device.PutMessageBuffer(elem.buffer)
+			peer.device.PutOutboundBuffer(elem.buffer)
 			peer.device.PutOutboundElement(elem)
 			peer.device.PutOutboundElementsContainer(elemsContainer)
 		}
@@ -138,9 +136,6 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	if err = peer.sendNoise(); err != nil {
-		return err
-	}
 	err = peer.SendBuffers([][]byte{buf})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
@@ -244,7 +239,7 @@ func (device *Device) RoutineReadFromTUN() {
 	defer func() {
 		for _, elem := range elems {
 			if elem != nil {
-				device.PutMessageBuffer(elem.buffer)
+				device.PutOutboundBuffer(elem.buffer)
 				device.PutOutboundElement(elem)
 			}
 		}
@@ -301,7 +296,7 @@ func (device *Device) RoutineReadFromTUN() {
 				peer.SendStagedPackets()
 			} else {
 				for _, elem := range elemsForPeer.elems {
-					device.PutMessageBuffer(elem.buffer)
+					device.PutOutboundBuffer(elem.buffer)
 					device.PutOutboundElement(elem)
 				}
 				device.PutOutboundElementsContainer(elemsForPeer)
@@ -328,12 +323,32 @@ func (device *Device) RoutineReadFromTUN() {
 	}
 }
 
+// maxQueuedInputPackets bounds the staged+outbound backlog of a peer fed via
+// InputPacket/InputPackets. Injected packets beyond it are dropped before they
+// are copied into pooled message buffers, like a full qdisc: injection has no
+// flow control, and the queues are bounded in containers (up to a full batch
+// each), so without this cap a flood is buffered instead of dropped.
+const maxQueuedInputPackets = 2048
+
 func (device *Device) InputPacket(destination []byte, packetSlices [][]byte) {
 	peer := device.allowedips.Lookup(destination)
 	if peer == nil {
 		return
 	}
-	elem := device.NewOutboundElement()
+	if peer.queuedOutboundPackets.Load() >= maxQueuedInputPackets {
+		return
+	}
+	var totalLength int
+	for _, packetSlice := range packetSlices {
+		totalLength += len(packetSlice)
+	}
+	allocLength := MessageEncapsulatingTransportSize + MessageTransportHeaderSize + totalLength + PaddingMultiple + chacha20poly1305.Overhead
+	if allocLength > MaxMessageSize {
+		return
+	}
+	elem := device.GetOutboundElement()
+	elem.buffer = device.GetOutboundBuffer(allocLength)
+	elem.nonce = 0
 	packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
 	var n int
 	for _, packetSlice := range packetSlices {
@@ -346,13 +361,75 @@ func (device *Device) InputPacket(destination []byte, packetSlices [][]byte) {
 		peer.StagePackets(elemsForPeer)
 		peer.SendStagedPackets()
 	} else {
-		device.PutMessageBuffer(elem.buffer)
+		device.PutOutboundBuffer(elem.buffer)
 		device.PutOutboundElement(elem)
 		device.PutOutboundElementsContainer(elemsForPeer)
 	}
 }
 
+type InputPacketRef struct {
+	Destination  []byte
+	PacketSlices [][]byte
+}
+
+func (device *Device) InputPackets(packets []*InputPacketRef) []*InputPacketRef {
+	var unmatched []*InputPacketRef
+	elemsByPeer := make(map[*Peer][]*QueueOutboundElementsContainer, len(packets))
+	for _, packetRef := range packets {
+		peer := device.allowedips.Lookup(packetRef.Destination)
+		if peer == nil {
+			unmatched = append(unmatched, packetRef)
+			continue
+		}
+		if peer.queuedOutboundPackets.Load() >= maxQueuedInputPackets {
+			continue
+		}
+		var totalLength int
+		for _, packetSlice := range packetRef.PacketSlices {
+			totalLength += len(packetSlice)
+		}
+		allocLength := MessageEncapsulatingTransportSize + MessageTransportHeaderSize + totalLength + PaddingMultiple + chacha20poly1305.Overhead
+		if allocLength > MaxMessageSize {
+			continue
+		}
+		elem := device.GetOutboundElement()
+		elem.buffer = device.GetOutboundBuffer(allocLength)
+		elem.nonce = 0
+		packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
+		var n int
+		for _, packetSlice := range packetRef.PacketSlices {
+			n += copy(packet[n:], packetSlice)
+		}
+		elem.packet = packet[:n]
+		containers := elemsByPeer[peer]
+		if len(containers) == 0 || len(containers[len(containers)-1].elems) >= conn.IdealBatchSize {
+			containers = append(containers, device.GetOutboundElementsContainer())
+			elemsByPeer[peer] = containers
+		}
+		elemsForPeer := containers[len(containers)-1]
+		elemsForPeer.elems = append(elemsForPeer.elems, elem)
+	}
+	for peer, containers := range elemsByPeer {
+		if peer.isRunning.Load() {
+			for _, elemsForPeer := range containers {
+				peer.StagePackets(elemsForPeer)
+			}
+			peer.SendStagedPackets()
+		} else {
+			for _, elemsForPeer := range containers {
+				for _, elem := range elemsForPeer.elems {
+					device.PutOutboundBuffer(elem.buffer)
+					device.PutOutboundElement(elem)
+				}
+				device.PutOutboundElementsContainer(elemsForPeer)
+			}
+		}
+	}
+	return unmatched
+}
+
 func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) {
+	peer.queuedOutboundPackets.Add(int32(len(elems.elems)))
 	for {
 		select {
 		case peer.queue.staged <- elems:
@@ -361,8 +438,9 @@ func (peer *Peer) StagePackets(elems *QueueOutboundElementsContainer) {
 		}
 		select {
 		case tooOld := <-peer.queue.staged:
+			peer.queuedOutboundPackets.Add(-int32(len(tooOld.elems)))
 			for _, elem := range tooOld.elems {
-				peer.device.PutMessageBuffer(elem.buffer)
+				peer.device.PutOutboundBuffer(elem.buffer)
 				peer.device.PutOutboundElement(elem)
 			}
 			peer.device.PutOutboundElementsContainer(tooOld)
@@ -409,6 +487,8 @@ top:
 			elemsContainer.elems = elemsContainer.elems[:i]
 
 			if elemsContainerOOO != nil {
+				// Already counted at their original staging; StagePackets will count them again.
+				peer.queuedOutboundPackets.Add(-int32(len(elemsContainerOOO.elems)))
 				peer.StagePackets(elemsContainerOOO) // XXX: Out of order, but we can't front-load go chans
 			}
 
@@ -422,8 +502,9 @@ top:
 				peer.queue.outbound.c <- elemsContainer
 				peer.device.queue.encryption.c <- elemsContainer
 			} else {
+				peer.queuedOutboundPackets.Add(-int32(len(elemsContainer.elems)))
 				for _, elem := range elemsContainer.elems {
-					peer.device.PutMessageBuffer(elem.buffer)
+					peer.device.PutOutboundBuffer(elem.buffer)
 					peer.device.PutOutboundElement(elem)
 				}
 				peer.device.PutOutboundElementsContainer(elemsContainer)
@@ -442,8 +523,9 @@ func (peer *Peer) FlushStagedPackets() {
 	for {
 		select {
 		case elemsContainer := <-peer.queue.staged:
+			peer.queuedOutboundPackets.Add(-int32(len(elemsContainer.elems)))
 			for _, elem := range elemsContainer.elems {
-				peer.device.PutMessageBuffer(elem.buffer)
+				peer.device.PutOutboundBuffer(elem.buffer)
 				peer.device.PutOutboundElement(elem)
 			}
 			peer.device.PutOutboundElementsContainer(elemsContainer)
@@ -537,8 +619,9 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 			// TODO: rework peer shutdown order to ensure
 			// that we never accidentally keep timers alive longer than necessary.
 			elemsContainer.Lock()
+			peer.queuedOutboundPackets.Add(-int32(len(elemsContainer.elems)))
 			for _, elem := range elemsContainer.elems {
-				device.PutMessageBuffer(elem.buffer)
+				device.PutOutboundBuffer(elem.buffer)
 				device.PutOutboundElement(elem)
 			}
 			device.PutOutboundElementsContainer(elemsContainer)
@@ -547,7 +630,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		dataSent := false
 		elemsContainer.Lock()
 		for _, elem := range elemsContainer.elems {
-			if len(elem.packet[MessageEncapsulatingTransportSize:]) != MessageKeepaliveSize {
+			if len(elem.packet) != MessageKeepaliveSize {
 				dataSent = true
 			}
 			bufs = append(bufs, elem.packet)
@@ -560,8 +643,9 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		if dataSent {
 			peer.timersDataSent()
 		}
+		peer.queuedOutboundPackets.Add(-int32(len(elemsContainer.elems)))
 		for _, elem := range elemsContainer.elems {
-			device.PutMessageBuffer(elem.buffer)
+			device.PutOutboundBuffer(elem.buffer)
 			device.PutOutboundElement(elem)
 		}
 		device.PutOutboundElementsContainer(elemsContainer)
@@ -579,76 +663,4 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 
 		peer.keepKeyFreshSending()
 	}
-}
-
-func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error {
-	//{GFW-knocker
-	var a2 []byte
-	if len(clist) > 0 {
-		a1 := clist[hiddify.RandBetween(0, int64(len(clist)-1))]
-		a2 = []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
-	} else {
-		a2 = []byte{0x00, 0x00, 0x00, 0x01, 0x08}
-	}
-	a3 := make([]byte, 8)
-	_, err3 := rand.Read(a3)
-	if err3 != nil {
-		return err3
-	}
-	a4 := []byte{0x00, 0x00, 0x44, 0xD0}
-
-	finalPacket := make([]byte, 0, len(payload)+len(a2)+len(a3)+len(a4))
-	finalPacket = append(finalPacket, a2...)
-	finalPacket = append(finalPacket, a3...)
-	finalPacket = append(finalPacket, a4...)
-	finalPacket = append(finalPacket, payload...)
-	//GFW-knocker}
-	// Send the random packet
-	if noModify {
-		return peer.SendBuffersWithoutModify([][]byte{finalPacket})
-	} else {
-		return peer.SendBuffers([][]byte{finalPacket})
-	}
-}
-
-func (peer *Peer) sendNoise() error {
-	if !peer.device.HNoise.FakePacket.Enabled {
-		return nil
-	}
-	fakePacketsCount := peer.device.HNoise.FakePacket.Count
-	fakePacketsDelays := peer.device.HNoise.FakePacket.Delay
-	fakePacketsSize := peer.device.HNoise.FakePacket.Size
-	if fakePacketsCount.To == 0 || fakePacketsSize.To == 0 {
-		return nil
-	}
-
-	numPackets := fakePacketsCount.Rand()
-	for i := 0; i < numPackets; i++ {
-		if peer.device.isClosed() || !peer.isRunning.Load() {
-			return nil
-		}
-		// Generate a random packet size between 10 and 40 bytes
-		payloadSize := fakePacketsSize.Rand()
-		randomPayload := make([]byte, payloadSize)
-		_, err := rand.Read(randomPayload)
-		if err != nil {
-			return fmt.Errorf("error generating random packet: %v", err)
-		}
-		peer.customSend(peer.device.HNoise.FakePacket.Header, randomPayload, peer.device.HNoise.FakePacket.NoModify)
-		if err != nil {
-			return fmt.Errorf("error sending random packet: %v", err)
-		}
-		if i < numPackets-1 {
-			select {
-			case <-peer.device.stopCh:
-				return nil
-			case <-peer.device.closed:
-				return nil
-			case <-time.After(time.Duration(fakePacketsDelays.Rand()) * time.Millisecond):
-			}
-
-		}
-	}
-	return nil
-
 }
