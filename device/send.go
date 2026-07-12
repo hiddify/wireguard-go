@@ -6,14 +6,17 @@
 package device
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/tun"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
@@ -136,6 +139,9 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
+	if err = peer.sendNoise(); err != nil { //H
+		return err //H
+	} //H
 	err = peer.SendBuffers([][]byte{buf})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
@@ -663,4 +669,76 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 
 		peer.keepKeyFreshSending()
 	}
+}
+
+func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error { //H
+	//{GFW-knocker
+	var a2 []byte
+	if len(clist) > 0 {
+		a1 := clist[hiddify.RandBetween(0, int64(len(clist)-1))]
+		a2 = []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
+	} else {
+		a2 = []byte{0x00, 0x00, 0x00, 0x01, 0x08}
+	}
+	a3 := make([]byte, 8)
+	_, err3 := rand.Read(a3)
+	if err3 != nil {
+		return err3
+	}
+	a4 := []byte{0x00, 0x00, 0x44, 0xD0}
+
+	finalPacket := make([]byte, 0, len(payload)+len(a2)+len(a3)+len(a4))
+	finalPacket = append(finalPacket, a2...)
+	finalPacket = append(finalPacket, a3...)
+	finalPacket = append(finalPacket, a4...)
+	finalPacket = append(finalPacket, payload...)
+	//GFW-knocker}
+	// Send the random packet
+	if noModify {
+		return peer.SendBuffersWithoutModify([][]byte{finalPacket})
+	} else {
+		return peer.SendBuffers([][]byte{finalPacket})
+	}
+}
+
+func (peer *Peer) sendNoise() error { //H
+	if !peer.device.HNoise.FakePacket.Enabled {
+		return nil
+	}
+	fakePacketsCount := peer.device.HNoise.FakePacket.Count
+	fakePacketsDelays := peer.device.HNoise.FakePacket.Delay
+	fakePacketsSize := peer.device.HNoise.FakePacket.Size
+	if fakePacketsCount.To == 0 || fakePacketsSize.To == 0 {
+		return nil
+	}
+
+	numPackets := fakePacketsCount.Rand()
+	for i := 0; i < numPackets; i++ {
+		if peer.device.isClosed() || !peer.isRunning.Load() {
+			return nil
+		}
+		// Generate a random packet size between 10 and 40 bytes
+		payloadSize := fakePacketsSize.Rand()
+		randomPayload := make([]byte, payloadSize)
+		_, err := rand.Read(randomPayload)
+		if err != nil {
+			return fmt.Errorf("error generating random packet: %v", err)
+		}
+		peer.customSend(peer.device.HNoise.FakePacket.Header, randomPayload, peer.device.HNoise.FakePacket.NoModify)
+		if err != nil {
+			return fmt.Errorf("error sending random packet: %v", err)
+		}
+		if i < numPackets-1 {
+			select {
+			case <-peer.device.stopCh:
+				return nil
+			case <-peer.device.closed:
+				return nil
+			case <-time.After(time.Duration(fakePacketsDelays.Rand()) * time.Millisecond):
+			}
+
+		}
+	}
+	return nil
+
 }

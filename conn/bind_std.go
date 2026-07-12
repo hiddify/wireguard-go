@@ -407,6 +407,10 @@ func (e ErrUDPGSODisabled) Unwrap() error {
 	return e.RetryErr
 }
 
+func (s *StdNetBind) SendWithoutModify(bufs [][]byte, endpoint Endpoint, offset int) error { //H
+	return s.Send(bufs, endpoint, offset) //H
+} //H
+
 func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
 	for len(bufs) > IdealBatchSize {
 		err := s.Send(bufs[:IdealBatchSize], endpoint, offset)

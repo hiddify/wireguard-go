@@ -51,6 +51,10 @@ type Bind interface {
 	// additional encapsulation. The length of bufs must not exceed BatchSize().
 	Send(bufs [][]byte, ep Endpoint, offset int) error
 
+	// SendWithoutModify is like Send but skips any header-modifying send
+	// path (e.g. GSO offload) that would alter payload bytes. //H
+	SendWithoutModify(bufs [][]byte, ep Endpoint, offset int) error //H
+
 	// ParseEndpoint creates a new endpoint from a string.
 	ParseEndpoint(s string) (Endpoint, error)
 
