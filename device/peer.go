@@ -172,6 +172,37 @@ func (p *Peer) SetPresharedKey(psk NoisePresharedKey) {
 	p.handshake.presharedKey = psk
 }
 
+func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error {
+	peer.device.net.RLock()
+	defer peer.device.net.RUnlock()
+
+	if peer.device.isClosed() {
+		return nil
+	}
+
+	peer.endpoint.Lock()
+	endpoint := peer.endpoint.val
+	if endpoint == nil {
+		peer.endpoint.Unlock()
+		return errors.New("no known endpoint for peer")
+	}
+	if peer.endpoint.clearSrcOnTx {
+		endpoint.ClearSrc()
+		peer.endpoint.clearSrcOnTx = false
+	}
+	peer.endpoint.Unlock()
+	//Hiddify-GFW-knocker
+	err := peer.device.net.bind.SendWithoutModify(buffers, endpoint, MessageEncapsulatingTransportSize)
+	if err == nil {
+		var totalLen uint64
+		for _, b := range buffers {
+			totalLen += uint64(len(b))
+		}
+		peer.txBytes.Add(totalLen)
+	}
+	return err
+}
+
 // SendBuffers sends buffers to peer. WireGuard packet data in each element of
 // buffers must be preceded by MessageEncapsulatingTransportSize number of
 // bytes.
@@ -345,7 +376,10 @@ func (peer *Peer) ExpireCurrentKeypairs() {
 func (peer *Peer) Stop() {
 	peer.state.Lock()
 	defer peer.state.Unlock()
-
+	select {
+	case peer.device.stopCh <- 1: //H
+	default:
+	}
 	if !peer.isRunning.Swap(false) {
 		return
 	}

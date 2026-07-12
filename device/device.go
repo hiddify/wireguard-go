@@ -17,6 +17,7 @@ import (
 	"github.com/sagernet/sing/service"
 	"github.com/sagernet/sing/service/pause"
 	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/ratelimiter"
 	"github.com/sagernet/wireguard-go/rwcancel"
 	"github.com/sagernet/wireguard-go/tun"
@@ -101,6 +102,9 @@ type Device struct {
 	closed       chan struct{}
 	log          *Logger
 	pauseManager pause.Manager
+
+	HNoise hiddify.NoiseOptions //H
+	stopCh chan int             //H
 }
 
 // deviceState represents the state of a Device.
@@ -303,6 +307,7 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 
 func NewDevice(ctx context.Context, tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int) *Device {
 	device := new(Device)
+	device.stopCh = make(chan int, 1) //H
 	device.pauseManager = service.FromContext[pause.Manager](ctx)
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
@@ -692,6 +697,10 @@ func (device *Device) SendKeepalivesToPeersWithCurrentKeypair() {
 // closeBindLocked closes the device's net.bind.
 // The caller must hold the net mutex.
 func closeBindLocked(device *Device) error {
+	select {
+	case device.stopCh <- 1:
+	default:
+	}
 	var err error
 	netc := &device.net
 	if netc.netlinkCancel != nil {
