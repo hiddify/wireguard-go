@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -129,7 +129,7 @@ func (device *Device) flushOutboundQueue(q *autodrainingOutboundQueue) {
 		case elemsContainer := <-q.c:
 			elemsContainer.Lock()
 			for _, elem := range elemsContainer.elems {
-				device.PutMessageBuffer(elem.buffer)
+				device.PutOutboundBuffer(elem.buffer)
 				device.PutOutboundElement(elem)
 			}
 			device.PutOutboundElementsContainer(elemsContainer)

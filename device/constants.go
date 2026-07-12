@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -27,9 +27,9 @@ const (
 )
 
 const (
-	MinMessageSize = MessageKeepaliveSize                  // minimum size of transport message (keepalive)
-	MaxMessageSize = MaxSegmentSize                        // maximum size of transport message
-	MaxContentSize = MaxSegmentSize - MessageTransportSize // maximum size of transport message content
+	MinMessageSize = MessageKeepaliveSize                                                      // minimum size of transport message (keepalive)
+	MaxMessageSize = MaxSegmentSize                                                            // maximum size of transport message
+	MaxContentSize = MaxSegmentSize - MessageTransportSize - MessageEncapsulatingTransportSize // maximum size of transport message content
 )
 
 /* Implementation constants */

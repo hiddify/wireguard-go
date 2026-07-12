@@ -1,12 +1,11 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"net"
@@ -290,8 +289,7 @@ func (device *Device) RoutineHandshake(id int) {
 			// unmarshal packet
 
 			var reply MessageCookieReply
-			reader := bytes.NewReader(elem.packet)
-			err := binary.Read(reader, binary.LittleEndian, &reply)
+			err := reply.unmarshal(elem.packet)
 			if err != nil {
 				device.log.Verbosef("Failed to decode cookie reply")
 				goto skip
@@ -356,8 +354,7 @@ func (device *Device) RoutineHandshake(id int) {
 			// unmarshal
 
 			var msg MessageInitiation
-			reader := bytes.NewReader(elem.packet)
-			err := binary.Read(reader, binary.LittleEndian, &msg)
+			err := msg.unmarshal(elem.packet)
 			if err != nil {
 				device.log.Errorf("Failed to decode initiation message")
 				goto skip
@@ -365,7 +362,7 @@ func (device *Device) RoutineHandshake(id int) {
 
 			// consume initiation
 
-			peer := device.ConsumeMessageInitiation(&msg)
+			peer := device.ConsumeMessageInitiation(&msg, elem.endpoint)
 			if peer == nil {
 				device.log.Verbosef("Received invalid initiation message from %s", elem.endpoint.DstToString())
 				goto skip
@@ -389,8 +386,7 @@ func (device *Device) RoutineHandshake(id int) {
 			// unmarshal
 
 			var msg MessageResponse
-			reader := bytes.NewReader(elem.packet)
-			err := binary.Read(reader, binary.LittleEndian, &msg)
+			err := msg.unmarshal(elem.packet)
 			if err != nil {
 				device.log.Errorf("Failed to decode response message")
 				goto skip
@@ -418,7 +414,6 @@ func (device *Device) RoutineHandshake(id int) {
 			// derive keypair
 
 			err = peer.BeginSymmetricSession()
-
 			if err != nil {
 				device.log.Errorf("%v - Failed to derive keypair: %v", peer, err)
 				goto skip
@@ -449,7 +444,10 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 			return
 		}
 		elemsContainer.Lock()
-		for _, elem := range elemsContainer.elems {
+		validTailPacket := -1
+		dataPacketReceived := false
+		rxBytesLen := uint64(0)
+		for i, elem := range elemsContainer.elems {
 			if elem.packet == nil {
 				// decryption failed
 				continue
@@ -459,21 +457,22 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 				continue
 			}
 
-			peer.SetEndpointFromPacket(elem.endpoint)
+			validTailPacket = i
 			if peer.ReceivedWithKeypair(elem.keypair) {
+				peer.SetEndpointFromPacket(elem.endpoint)
 				peer.timersHandshakeComplete()
 				peer.SendStagedPackets()
 			}
-			peer.keepKeyFreshReceiving()
-			peer.timersAnyAuthenticatedPacketTraversal()
-			peer.timersAnyAuthenticatedPacketReceived()
-			peer.rxBytes.Add(uint64(len(elem.packet) + MinMessageSize))
+			if ep, ok := elem.endpoint.(conn.PeerAwareEndpoint); ok {
+				ep.FromPeer(peer.handshake.remoteStatic)
+			}
+			rxBytesLen += uint64(len(elem.packet) + MinMessageSize)
 
 			if len(elem.packet) == 0 {
 				device.log.Verbosef("%v - Receiving keepalive packet", peer)
 				continue
 			}
-			peer.timersDataReceived()
+			dataPacketReceived = true
 
 			switch elem.packet[0] >> 4 {
 			case 4:
@@ -515,6 +514,17 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 			}
 
 			bufs = append(bufs, elem.buffer[:MessageTransportOffsetContent+len(elem.packet)])
+		}
+
+		peer.rxBytes.Add(rxBytesLen)
+		if validTailPacket >= 0 {
+			peer.SetEndpointFromPacket(elemsContainer.elems[validTailPacket].endpoint)
+			peer.keepKeyFreshReceiving()
+			peer.timersAnyAuthenticatedPacketTraversal()
+			peer.timersAnyAuthenticatedPacketReceived()
+		}
+		if dataPacketReceived {
+			peer.timersDataReceived()
 		}
 		if len(bufs) > 0 {
 			_, err := device.tun.device.Write(bufs, MessageTransportOffsetContent)

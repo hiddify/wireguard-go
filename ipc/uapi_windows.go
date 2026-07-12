@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package ipc
@@ -8,7 +8,6 @@ package ipc
 import (
 	"net"
 
-	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/ipc/namedpipe"
 	"golang.org/x/sys/windows"
 )
@@ -75,7 +74,6 @@ func UAPIListen(name string) (net.Listener, error) {
 	}
 
 	go func(l *UAPIListener) {
-		defer hiddify.NoCrash()
 		for {
 			conn, err := l.listener.Accept()
 			if err != nil {

@@ -1,18 +1,19 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
 
 import (
-	"fmt"
+	"context"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/sagernet/sing/common/atomic"
-
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
 	"github.com/sagernet/wireguard-go/conn"
 	"github.com/sagernet/wireguard-go/ratelimiter"
 	"github.com/sagernet/wireguard-go/rwcancel"
@@ -70,11 +71,11 @@ type Device struct {
 	cookieChecker CookieChecker
 
 	pool struct {
-		inboundElementsContainer  *WaitPool
-		outboundElementsContainer *WaitPool
+		inboundElementsContainer  *sync.Pool
+		outboundElementsContainer *sync.Pool
 		messageBuffers            *WaitPool
-		inboundElements           *WaitPool
-		outboundElements          *WaitPool
+		inboundElements           *sync.Pool
+		outboundElements          *sync.Pool
 	}
 
 	queue struct {
@@ -88,14 +89,16 @@ type Device struct {
 		mtu    atomic.Int32
 	}
 
-	ipcMutex            sync.RWMutex
-	closed              chan struct{}
-	log                 *Logger
-	FakePackets         []int
-	FakePacketsDelays   []int
-	FakePacketsSize     []int
-	FakePacketsHeader   []byte
-	FakePacketsNoModify bool
+	ipcMutex     sync.RWMutex
+	closed       chan struct{}
+	log          *Logger
+	pauseManager pause.Manager
+
+	FakePackets         []int  //hiddify
+	FakePacketsDelays   []int  //hiddify
+	FakePacketsSize     []int  //hiddify
+	FakePacketsHeader   []byte //hiddify
+	FakePacketsNoModify bool   //hiddify
 	stopCh              chan int //hiddify
 }
 
@@ -132,9 +135,6 @@ func (device *Device) isClosed() bool {
 func (device *Device) isUp() bool {
 	return device.deviceState() == deviceStateUp
 }
-func (device *Device) IsUp() bool {
-	return device.isUp()
-}
 
 // Must hold device.peers.Lock()
 func removePeerLocked(device *Device, peer *Peer, key NoisePublicKey) {
@@ -148,13 +148,12 @@ func removePeerLocked(device *Device, peer *Peer, key NoisePublicKey) {
 
 // changeState attempts to change the device state to match want.
 func (device *Device) changeState(want deviceState) (err error) {
-	defer NoCrash(device)
 	device.state.Lock()
 	defer device.state.Unlock()
 	old := device.deviceState()
 	if old == deviceStateClosed {
 		// once closed, always closed
-		device.log.Errorf("Interface closed, ignored requested state %s", want)
+		device.log.Verbosef("Interface closed, ignored requested state %s", want)
 		return nil
 	}
 	switch want {
@@ -182,8 +181,8 @@ func (device *Device) changeState(want deviceState) (err error) {
 // The caller must hold device.state.mu and is responsible for updating device.state.state.
 func (device *Device) upLocked() error {
 	if err := device.BindUpdate(); err != nil {
-		device.log.Errorf("Hiddify! Unable to update bind: %v", err)
-		return fmt.Errorf("unable to update bind: %v", err)
+		device.log.Errorf("Unable to update bind: %v", err)
+		return err
 	}
 
 	// The IPC set operation waits for peers to be created before calling Start() on them,
@@ -293,9 +292,10 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 	return nil
 }
 
-func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int) *Device {
+func NewDevice(ctx context.Context, tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int) *Device {
 	device := new(Device)
 	device.stopCh = make(chan int, 1) //hiddify
+	device.pauseManager = service.FromContext[pause.Manager](ctx)
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger
@@ -383,11 +383,10 @@ func (device *Device) RemoveAllPeers() {
 }
 
 func (device *Device) Close() {
-	defer NoCrash(device)
-	device.ipcMutex.Lock()
-	defer device.ipcMutex.Unlock()
 	device.state.Lock()
 	defer device.state.Unlock()
+	device.ipcMutex.Lock()
+	defer device.ipcMutex.Unlock()
 	if device.isClosed() {
 		return
 	}
@@ -439,11 +438,11 @@ func (device *Device) SendKeepalivesToPeersWithCurrentKeypair() {
 // closeBindLocked closes the device's net.bind.
 // The caller must hold the net mutex.
 func closeBindLocked(device *Device) error {
+	select { //hiddify
+	case device.stopCh <- 1: //hiddify
+	default: //hiddify
+	} //hiddify
 	var err error
-	select {
-	case device.stopCh <- 1:
-	default:
-	}
 	netc := &device.net
 	if netc.netlinkCancel != nil {
 		netc.netlinkCancel.Cancel()
@@ -452,14 +451,10 @@ func closeBindLocked(device *Device) error {
 		err = netc.bind.Close()
 	}
 	netc.stopping.Wait()
-	if err != nil {
-		return fmt.Errorf("closeBindLocked %v", err)
-	}
 	return err
 }
 
 func (device *Device) Bind() conn.Bind {
-	defer NoCrash(device)
 	device.net.Lock()
 	defer device.net.Unlock()
 	return device.net.bind
@@ -485,11 +480,7 @@ func (device *Device) BindSetMark(mark uint32) error {
 	// clear cached source addresses
 	device.peers.RLock()
 	for _, peer := range device.peers.keyMap {
-		peer.Lock()
-		defer peer.Unlock()
-		if peer.endpoint != nil {
-			peer.endpoint.ClearSrc()
-		}
+		peer.markEndpointSrcForClearing()
 	}
 	device.peers.RUnlock()
 
@@ -497,18 +488,16 @@ func (device *Device) BindSetMark(mark uint32) error {
 }
 
 func (device *Device) BindUpdate() error {
-	defer NoCrash(device)
 	device.net.Lock()
 	defer device.net.Unlock()
 
 	// close existing sockets
 	if err := closeBindLocked(device); err != nil {
-		return fmt.Errorf("Hiddify! closing old bind %v", err)
+		return err
 	}
 
 	// open new sockets
 	if !device.isUp() {
-		device.log.Errorf("Hiddify! device is not up so will not update")
 		return nil
 	}
 
@@ -519,39 +508,29 @@ func (device *Device) BindUpdate() error {
 
 	recvFns, netc.port, err = netc.bind.Open(netc.port)
 	if err != nil {
-		device.log.Errorf("Hiddify! Error in opening new bind %v", err)
 		netc.port = 0
-		recvFns, netc.port, err = netc.bind.Open(netc.port) //hiddify: retry
-		if err != nil {
-			netc.port = 0
-			return fmt.Errorf("Hiddify! Error in opening new bind %v", err)
-		}
+		return err
 	}
 
 	netc.netlinkCancel, err = device.startRouteListener(netc.bind)
 	if err != nil {
 		netc.bind.Close()
 		netc.port = 0
-		return fmt.Errorf("Error in starting route listener %v", err)
+		return err
 	}
 
 	// set fwmark
 	if netc.fwmark != 0 {
 		err = netc.bind.SetMark(netc.fwmark)
 		if err != nil {
-			return fmt.Errorf("Error in setting mark %v", err)
-
+			return err
 		}
 	}
 
 	// clear cached source addresses
 	device.peers.RLock()
 	for _, peer := range device.peers.keyMap {
-		peer.Lock()
-		defer peer.Unlock()
-		if peer.endpoint != nil {
-			peer.endpoint.ClearSrc()
-		}
+		peer.markEndpointSrcForClearing()
 	}
 	device.peers.RUnlock()
 
@@ -564,12 +543,11 @@ func (device *Device) BindUpdate() error {
 		go device.RoutineReceiveIncoming(batchSize, fn)
 	}
 
-	device.log.Verbosef("Hiddify! UDP bind has been updated")
+	device.log.Verbosef("UDP bind has been updated")
 	return nil
 }
 
 func (device *Device) BindClose() error {
-	defer NoCrash(device)
 	device.net.Lock()
 	err := closeBindLocked(device)
 	device.net.Unlock()

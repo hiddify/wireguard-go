@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -9,25 +9,30 @@ import (
 	"container/list"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/sagernet/sing/common/atomic"
 	"github.com/sagernet/wireguard-go/conn"
 )
 
 type Peer struct {
 	isRunning         atomic.Bool
-	sync.RWMutex      // Mostly protects endpoint, but is generally taken whenever we modify peer
 	keypairs          Keypairs
 	handshake         Handshake
 	device            *Device
-	endpoint          conn.Endpoint
 	stopping          sync.WaitGroup // routines pending stop
 	txBytes           atomic.Uint64  // bytes send to peer (endpoint)
 	rxBytes           atomic.Uint64  // bytes received from peer
 	lastHandshakeNano atomic.Int64   // nano seconds since epoch
 
-	disableRoaming bool
+	queuedOutboundPackets atomic.Int32 // packets in staged+outbound queues, for input backpressure
+
+	endpoint struct {
+		sync.Mutex
+		val            conn.Endpoint
+		clearSrcOnTx   bool // signal to val.ClearSrc() prior to next packet transmission
+		disableRoaming bool
+	}
 
 	timers struct {
 		retransmitHandshake     *Timer
@@ -74,8 +79,6 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 
 	// create peer
 	peer := new(Peer)
-	peer.Lock()
-	defer peer.Unlock()
 
 	peer.cookieGenerator.Init(pk)
 	peer.device = device
@@ -97,7 +100,11 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	handshake.mutex.Unlock()
 
 	// reset endpoint
-	peer.endpoint = nil
+	peer.endpoint.Lock()
+	peer.endpoint.val = nil
+	peer.endpoint.disableRoaming = false
+	peer.endpoint.clearSrcOnTx = false
+	peer.endpoint.Unlock()
 
 	// init timers
 	peer.timersInit()
@@ -108,7 +115,7 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	return peer, nil
 }
 
-func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error {
+func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error { //hiddify
 	peer.device.net.RLock()
 	defer peer.device.net.RUnlock()
 
@@ -116,14 +123,19 @@ func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error {
 		return nil
 	}
 
-	peer.RLock()
-	defer peer.RUnlock()
-
-	if peer.endpoint == nil {
+	peer.endpoint.Lock()
+	endpoint := peer.endpoint.val
+	if endpoint == nil {
+		peer.endpoint.Unlock()
 		return errors.New("no known endpoint for peer")
 	}
+	if peer.endpoint.clearSrcOnTx {
+		endpoint.ClearSrc()
+		peer.endpoint.clearSrcOnTx = false
+	}
+	peer.endpoint.Unlock()
 	//Hiddify-GFW-knocker
-	err := peer.device.net.bind.SendWithoutModify(buffers, peer.endpoint)
+	err := peer.device.net.bind.SendWithoutModify(buffers, endpoint, MessageEncapsulatingTransportSize)
 	if err == nil {
 		var totalLen uint64
 		for _, b := range buffers {
@@ -134,6 +146,9 @@ func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error {
 	return err
 }
 
+// SendBuffers sends buffers to peer. WireGuard packet data in each element of
+// buffers must be preceded by MessageEncapsulatingTransportSize number of
+// bytes.
 func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	peer.device.net.RLock()
 	defer peer.device.net.RUnlock()
@@ -142,14 +157,19 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 		return nil
 	}
 
-	peer.RLock()
-	defer peer.RUnlock()
-
-	if peer.endpoint == nil {
+	peer.endpoint.Lock()
+	endpoint := peer.endpoint.val
+	if endpoint == nil {
+		peer.endpoint.Unlock()
 		return errors.New("no known endpoint for peer")
 	}
+	if peer.endpoint.clearSrcOnTx {
+		endpoint.ClearSrc()
+		peer.endpoint.clearSrcOnTx = false
+	}
+	peer.endpoint.Unlock()
 
-	err := peer.device.net.bind.Send(buffers, peer.endpoint)
+	err := peer.device.net.bind.Send(buffers, endpoint, MessageEncapsulatingTransportSize)
 	if err == nil {
 		var totalLen uint64
 		for _, b := range buffers {
@@ -206,6 +226,7 @@ func (peer *Peer) Start() {
 	// reset routine state
 	peer.stopping.Wait()
 	peer.stopping.Add(2)
+	peer.queuedOutboundPackets.Store(0)
 
 	peer.handshake.mutex.Lock()
 	peer.handshake.lastSentHandshake = time.Now().Add(-(RekeyTimeout + time.Second))
@@ -279,10 +300,10 @@ func (peer *Peer) Stop() {
 	if !peer.isRunning.Swap(false) {
 		return
 	}
-	select {
-	case peer.device.stopCh <- 1:
-	default:
-	}
+	select { //hiddify
+	case peer.device.stopCh <- 1: //hiddify
+	default: //hiddify
+	} //hiddify
 	peer.device.log.Verbosef("%v - Stopping", peer)
 
 	peer.timersStop()
@@ -296,10 +317,20 @@ func (peer *Peer) Stop() {
 }
 
 func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
-	if peer.disableRoaming {
+	peer.endpoint.Lock()
+	defer peer.endpoint.Unlock()
+	if peer.endpoint.disableRoaming {
 		return
 	}
-	peer.Lock()
-	peer.endpoint = endpoint
-	peer.Unlock()
+	peer.endpoint.clearSrcOnTx = false
+	peer.endpoint.val = endpoint
+}
+
+func (peer *Peer) markEndpointSrcForClearing() {
+	peer.endpoint.Lock()
+	defer peer.endpoint.Unlock()
+	if peer.endpoint.val == nil {
+		return
+	}
+	peer.endpoint.clearSrcOnTx = true
 }

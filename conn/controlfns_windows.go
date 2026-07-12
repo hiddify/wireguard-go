@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package conn
@@ -12,7 +12,7 @@ import (
 )
 
 func init() {
-	ControlFns = append(ControlFns,
+	controlFns = append(controlFns,
 		func(network, address string, c syscall.RawConn) error {
 			return c.Control(func(fd uintptr) {
 				_ = windows.SetsockoptInt(windows.Handle(fd), windows.SOL_SOCKET, windows.SO_RCVBUF, socketBufferSize)

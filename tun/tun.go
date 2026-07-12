@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package tun
@@ -50,4 +50,18 @@ type Device interface {
 	// written in a single read/write call. BatchSize must not change over the
 	// lifetime of a Device.
 	BatchSize() int
+}
+
+// GRODevice is a Device extended with methods for disabling GRO. Certain OS
+// versions may have offload bugs. Where these bugs negatively impact throughput
+// or break connectivity entirely we can use these methods to disable the
+// related offload.
+type GRODevice interface {
+	Device
+
+	// DisableUDPGRO disables UDP GRO if it is enabled.
+	DisableUDPGRO()
+
+	// DisableTCPGRO disables TCP GRO if it is enabled.
+	DisableTCPGRO()
 }

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  *
  * This is based heavily on timers.c from the kernel implementation.
  */
@@ -39,6 +39,9 @@ func (peer *Peer) NewTimer(expirationFunction func(*Peer)) *Timer {
 		timer.isPending = false
 		timer.modifyingLock.Unlock()
 
+		if pauseManager := peer.device.pauseManager; pauseManager != nil {
+			pauseManager.WaitActive()
+		}
 		expirationFunction(peer)
 	})
 	timer.Stop()
@@ -100,11 +103,7 @@ func expiredRetransmitHandshake(peer *Peer) {
 		peer.device.log.Verbosef("%s - Handshake did not complete after %d seconds, retrying (try %d)", peer, int(RekeyTimeout.Seconds()), peer.timers.handshakeAttempts.Load()+1)
 
 		/* We clear the endpoint address src address, in case this is the cause of trouble. */
-		peer.Lock()
-		if peer.endpoint != nil {
-			peer.endpoint.ClearSrc()
-		}
-		peer.Unlock()
+		peer.markEndpointSrcForClearing()
 
 		peer.SendHandshakeInitiation(true)
 	}
@@ -123,11 +122,7 @@ func expiredSendKeepalive(peer *Peer) {
 func expiredNewHandshake(peer *Peer) {
 	peer.device.log.Verbosef("%s - Retrying handshake because we stopped hearing back after %d seconds", peer, int((KeepaliveTimeout + RekeyTimeout).Seconds()))
 	/* We clear the endpoint address src address, in case this is the cause of trouble. */
-	peer.Lock()
-	if peer.endpoint != nil {
-		peer.endpoint.ClearSrc()
-	}
-	peer.Unlock()
+	peer.markEndpointSrcForClearing()
 	peer.SendHandshakeInitiation(false)
 }
 

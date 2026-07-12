@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -8,9 +8,9 @@ package device
 import (
 	"crypto/cipher"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/sagernet/sing/common/atomic"
 	"github.com/sagernet/wireguard-go/replay"
 )
 

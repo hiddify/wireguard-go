@@ -2,21 +2,22 @@
 
 set -e -o pipefail
 
-git rm -rf --ignore-unmatch \
-  .github \
-  tests \
-  **/*_test.go \
-  conn/bindtest \
-  tun/netstack \
-  tun/tuntest \
-  tun/testdata \
-  tun/checksum.go \
-  tun/operateonfd.go \
-  tun/tcp_offload_linux.go \
-  tun/tun_*.go \
-  *.go \
-  *.md
+function remove_unused() {
+  git rm -rf --ignore-unmatch \
+    .github \
+    tests \
+    *_test.go \
+    **/*_test.go \
+    conn/bindtest \
+    tun/netstack \
+    tun/tuntest \
+    tun/testdata \
+    main*.go \
+    *.md
+}
+
+remove_unused
+remove_unused
 
 go mod tidy
-git add go.mod go.sum
-git commit -m "Remove unused"
+git commit -a -m "Remove unused"

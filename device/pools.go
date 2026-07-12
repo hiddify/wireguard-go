@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  *
- * Copyright (C) 2017-2023 WireGuard LLC. All Rights Reserved.
+ * Copyright (C) 2017-2025 WireGuard LLC. All Rights Reserved.
  */
 
 package device
@@ -8,14 +8,14 @@ package device
 import (
 	"sync"
 
-	"github.com/sagernet/sing/common/atomic"
+	"github.com/sagernet/sing/common/buf"
 )
 
 type WaitPool struct {
 	pool  sync.Pool
 	cond  sync.Cond
 	lock  sync.Mutex
-	count atomic.Uint32
+	count uint32 // Get calls not yet Put back
 	max   uint32
 }
 
@@ -28,10 +28,10 @@ func NewWaitPool(max uint32, new func() any) *WaitPool {
 func (p *WaitPool) Get() any {
 	if p.max != 0 {
 		p.lock.Lock()
-		for p.count.Load() >= p.max {
+		for p.count >= p.max {
 			p.cond.Wait()
 		}
-		p.count.Add(1)
+		p.count++
 		p.lock.Unlock()
 	}
 	return p.pool.Get()
@@ -42,28 +42,30 @@ func (p *WaitPool) Put(x any) {
 	if p.max == 0 {
 		return
 	}
-	p.count.Add(^uint32(0))
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.count--
 	p.cond.Signal()
 }
 
 func (device *Device) PopulatePools() {
-	device.pool.inboundElementsContainer = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+	device.pool.inboundElementsContainer = &sync.Pool{New: func() any {
 		s := make([]*QueueInboundElement, 0, device.BatchSize())
 		return &QueueInboundElementsContainer{elems: s}
-	})
-	device.pool.outboundElementsContainer = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+	}}
+	device.pool.outboundElementsContainer = &sync.Pool{New: func() any {
 		s := make([]*QueueOutboundElement, 0, device.BatchSize())
 		return &QueueOutboundElementsContainer{elems: s}
-	})
+	}}
 	device.pool.messageBuffers = NewWaitPool(PreallocatedBuffersPerPool, func() any {
 		return new([MaxMessageSize]byte)
 	})
-	device.pool.inboundElements = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+	device.pool.inboundElements = &sync.Pool{New: func() any {
 		return new(QueueInboundElement)
-	})
-	device.pool.outboundElements = NewWaitPool(PreallocatedBuffersPerPool, func() any {
+	}}
+	device.pool.outboundElements = &sync.Pool{New: func() any {
 		return new(QueueOutboundElement)
-	})
+	}}
 }
 
 func (device *Device) GetInboundElementsContainer() *QueueInboundElementsContainer {
@@ -100,6 +102,20 @@ func (device *Device) GetMessageBuffer() *[MaxMessageSize]byte {
 
 func (device *Device) PutMessageBuffer(msg *[MaxMessageSize]byte) {
 	device.pool.messageBuffers.Put(msg)
+}
+
+// Outbound buffers come from the sing allocator instead of the bounded
+// messageBuffers pool: the injection paths (InputPacket/InputPackets) run on
+// the caller's shared read loop, which must never block on pool exhaustion,
+// and their packets are far smaller than MaxMessageSize, so they are allocated
+// by actual size. This also keeps the bounded pool exclusively for the receive
+// path, so outbound backlog can no longer starve it.
+func (device *Device) GetOutboundBuffer(size int) []byte {
+	return buf.Get(size)
+}
+
+func (device *Device) PutOutboundBuffer(buffer []byte) {
+	_ = buf.Put(buffer)
 }
 
 func (device *Device) GetInboundElement() *QueueInboundElement {
