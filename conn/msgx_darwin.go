@@ -87,6 +87,25 @@ func sockaddrFromAddrPort(addrPort netip.AddrPort, storage4 *unix.RawSockaddrIne
 	return unsafe.Pointer(storage6), unix.SizeofSockaddrInet6
 }
 
+// disconnectLocked issues connect(AF_UNSPEC) to dissolve a previously
+// connect()'d fd, so callers can fall back to the unconnected-socket
+// WriteMsgUDP/RecvMsgUDP path. Caller must hold s.msgx.connectLock.
+func (s *StdNetBind) disconnectLocked(rawConn syscall.RawConn, connected *atomic.Bool) {
+	var disconnectErr error
+	controlErr := rawConn.Control(func(fd uintptr) {
+		addr := unix.RawSockaddrAny{}
+		addr.Addr.Family = unix.AF_UNSPEC
+		//nolint:staticcheck
+		_, _, errno := unix.Syscall(unix.SYS_CONNECT, fd, uintptr(unsafe.Pointer(&addr)), unix.SizeofSockaddrAny)
+		if errno != 0 && errno != unix.EAFNOSUPPORT {
+			disconnectErr = errno
+		}
+	})
+	if controlErr == nil && disconnectErr == nil {
+		connected.Store(false)
+	}
+}
+
 // ensureConnected connects the family socket to the single peer on first
 // use, and permanently falls back if a second endpoint shows up.
 func (s *StdNetBind) ensureConnected(rawConn syscall.RawConn, isV6 bool, destination netip.AddrPort) bool {
@@ -104,19 +123,7 @@ func (s *StdNetBind) ensureConnected(rawConn syscall.RawConn, isV6 bool, destina
 			return false
 		}
 		s.msgx.disabled.Store(true)
-		var disconnectErr error
-		controlErr := rawConn.Control(func(fd uintptr) {
-			addr := unix.RawSockaddrAny{}
-			addr.Addr.Family = unix.AF_UNSPEC
-			//nolint:staticcheck
-			_, _, errno := unix.Syscall(unix.SYS_CONNECT, fd, uintptr(unsafe.Pointer(&addr)), unix.SizeofSockaddrAny)
-			if errno != 0 && errno != unix.EAFNOSUPPORT {
-				disconnectErr = errno
-			}
-		})
-		if controlErr == nil && disconnectErr == nil {
-			connected.Store(false)
-		}
+		s.disconnectLocked(rawConn, connected)
 		return false
 	}
 	s.msgx.connectLock.Lock()
@@ -210,8 +217,15 @@ func (s *StdNetBind) sendMsgX(conn *net.UDPConn, msgs []ipv6.Message) (bool, err
 			if sent == 0 {
 				// The syscall is refusing this socket entirely (sandbox,
 				// disconnected by the system, ...): disable and let the
-				// caller resend everything on the generic path.
+				// caller resend everything on the generic path. The fd is
+				// still connect()'d from ensureConnected, though — leaving
+				// it that way makes every subsequent WriteMsgUDP/ReadMsgUDP
+				// fail with "socket is already connected", since those
+				// assume an unconnected socket. Disconnect it first.
+				s.msgx.connectLock.Lock()
 				s.msgx.disabled.Store(true)
+				s.disconnectLocked(rawConn, s.msgx.connectedFlag(isV6))
+				s.msgx.connectLock.Unlock()
 				return false, nil
 			}
 			return true, errno
