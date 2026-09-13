@@ -350,11 +350,31 @@ func (device *Device) BatchSize() int {
 	return size
 }
 
+// AllowedIPs returns the device's allowed-IPs routing table, letting callers
+// look up which peer (if any) owns a given destination address.
+func (device *Device) AllowedIPs() *AllowedIPs {
+	return &device.allowedips
+}
+
 func (device *Device) LookupPeer(pk NoisePublicKey) *Peer {
 	device.peers.RLock()
 	defer device.peers.RUnlock()
 
 	return device.peers.keyMap[pk]
+}
+
+// LookupActivePeer returns the peer configured for pk and whether its
+// handling routines are currently running (i.e. it has been started via
+// peer.Start(), and not yet stopped). Callers that need a peer to attach an
+// endpoint resolver or otherwise interact with a live peer should use this
+// instead of LookupPeer, which returns a peer entry even if it has not
+// started or has already been torn down.
+func (device *Device) LookupActivePeer(pk NoisePublicKey) (*Peer, bool) {
+	peer := device.LookupPeer(pk)
+	if peer == nil {
+		return nil, false
+	}
+	return peer, peer.isRunning.Load()
 }
 
 func (device *Device) RemovePeer(key NoisePublicKey) {

@@ -54,6 +54,43 @@ type StdNetBind struct {
 
 	blackhole4 bool
 	blackhole6 bool
+
+	// egressProvider, when set, is consulted for a destination-specific
+	// egress *net.UDPConn (e.g. a NAT-mapped listener) before falling back
+	// to this Bind's own shared v4/v6 sockets. See SetEgressProvider.
+	egressProvider EgressProvider
+
+	// onSend/onReceive, when set, are called with the payload size (in
+	// bytes, excluding the packet header/offset) after a successful send
+	// or receive, for traffic accounting. See SetIOActivityFuncs.
+	onSend    func(size int)
+	onReceive func(size int)
+}
+
+// EgressProvider resolves a destination-specific outbound UDP socket, used
+// to let sends for different peers/destinations egress through distinct
+// NAT-mapped local ports instead of this Bind's single shared socket.
+type EgressProvider interface {
+	LookupEgress(destination netip.AddrPort) *net.UDPConn
+}
+
+// SetEgressProvider installs p as the destination-specific egress lookup
+// used by Send/SendWithoutModify. Pass nil to disable and always use this
+// Bind's own shared sockets.
+func (s *StdNetBind) SetEgressProvider(p EgressProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.egressProvider = p
+}
+
+// SetIOActivityFuncs installs callbacks invoked with the byte count of
+// every successfully sent (onSend) or received (onReceive) packet payload.
+// Either may be nil to disable that side's accounting.
+func (s *StdNetBind) SetIOActivityFuncs(onSend func(size int), onReceive func(size int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSend = onSend
+	s.onReceive = onReceive
 }
 
 func NewStdNetBind(externalControl control.Func) Bind {
@@ -327,6 +364,9 @@ func (s *StdNetBind) receiveIP(
 		}
 		numMsgs = 1
 	}
+	s.mu.Lock()
+	onReceive := s.onReceive
+	s.mu.Unlock()
 	for i := 0; i < numMsgs; i++ {
 		msg := &(*msgs)[i]
 		sizes[i] = msg.N
@@ -339,6 +379,9 @@ func (s *StdNetBind) receiveIP(
 		ep := &StdNetEndpoint{AddrPort: M.AddrPortFromNet(msg.Addr)} // TODO: remove allocation
 		getSrcFromControl(msg.OOB[:msg.NN], ep)
 		eps[i] = ep
+		if onReceive != nil {
+			onReceive(msg.N)
+		}
 	}
 	return numMsgs, nil
 }
@@ -432,11 +475,24 @@ func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
 		is6 = true
 		offload = s.ipv6TxOffload
 	}
+	egressProvider := s.egressProvider
+	onSend := s.onSend
 	s.mu.Unlock()
 
 	if blackhole {
 		return nil
 	}
+
+	// A destination-specific egress connection (if any) takes over the raw
+	// send entirely — it does not share the shared socket's batching/GSO
+	// state, so route it through a plain per-buffer WriteToUDPAddrPort
+	// instead of the batched path below.
+	if egressProvider != nil {
+		if egressConn := egressProvider.LookupEgress(endpoint.(*StdNetEndpoint).AddrPort); egressConn != nil {
+			return s.sendEgress(egressConn, endpoint.(*StdNetEndpoint), bufs, offset, onSend)
+		}
+	}
+
 	if conn == nil {
 		return syscall.EAFNOSUPPORT
 	}
@@ -494,11 +550,43 @@ retry:
 	if retried {
 		return ErrUDPGSODisabled{onLaddr: conn.LocalAddr().String(), RetryErr: err}
 	}
+	if err == nil && onSend != nil {
+		var total int
+		for _, buf := range bufs {
+			total += len(buf) - offset
+		}
+		onSend(total)
+	}
 	return err
 }
 
 func (s *StdNetBind) SetReservedForEndpoint(destination netip.AddrPort, reserved [3]byte) {
 	s.reservedForEndpoint[destination] = reserved
+}
+
+// sendEgress writes bufs to destination through egressConn, a
+// destination-specific socket returned by the installed EgressProvider,
+// bypassing this Bind's own shared v4/v6 sockets and their batching/GSO
+// state. Used when Send finds an egress override for the endpoint.
+func (s *StdNetBind) sendEgress(egressConn *net.UDPConn, endpoint *StdNetEndpoint, bufs [][]byte, offset int, onSend func(size int)) error {
+	dst := net.UDPAddrFromAddrPort(endpoint.AddrPort)
+	for _, buf := range bufs {
+		payload := buf[offset:]
+		if len(payload) > 3 {
+			reserved, loaded := s.reservedForEndpoint[endpoint.AddrPort]
+			if loaded {
+				copy(payload[1:4], reserved[:])
+			}
+		}
+		n, err := egressConn.WriteToUDP(payload, dst)
+		if err != nil {
+			return err
+		}
+		if onSend != nil {
+			onSend(n)
+		}
+	}
+	return nil
 }
 
 func (s *StdNetBind) send(conn *net.UDPConn, pc batchWriter, msgs []ipv6.Message) error {

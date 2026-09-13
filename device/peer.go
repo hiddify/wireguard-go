@@ -32,6 +32,7 @@ type Peer struct {
 		val            conn.Endpoint
 		clearSrcOnTx   bool // signal to val.ClearSrc() prior to next packet transmission
 		disableRoaming bool
+		resolver       func() ([]conn.Endpoint, error) // see SetEndpointResolver
 	}
 
 	timers struct {
@@ -115,6 +116,47 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	return peer, nil
 }
 
+// SetEndpointResolver installs resolve as the peer's on-demand endpoint
+// source, used whenever the peer has no fixed endpoint set (typically a
+// peer configured with a domain-name address, whose IP is not yet known or
+// may change). It is called lazily, the next time the peer needs to send
+// and has no endpoint cached; the first address it returns is used. Pass
+// nil to clear a previously installed resolver.
+func (peer *Peer) SetEndpointResolver(resolve func() ([]conn.Endpoint, error)) {
+	peer.endpoint.Lock()
+	defer peer.endpoint.Unlock()
+	peer.endpoint.resolver = resolve
+}
+
+// resolveEndpointLocked returns the peer's current endpoint, resolving it
+// via the installed resolver (see SetEndpointResolver) if none is cached
+// yet. Must be called with peer.endpoint locked; may unlock and re-lock
+// while the resolver runs, since resolution can block (e.g. on DNS).
+func (peer *Peer) resolveEndpointLocked() (conn.Endpoint, error) {
+	if peer.endpoint.val != nil {
+		return peer.endpoint.val, nil
+	}
+	resolver := peer.endpoint.resolver
+	if resolver == nil {
+		return nil, errors.New("no known endpoint for peer")
+	}
+	peer.endpoint.Unlock()
+	endpoints, err := resolver()
+	peer.endpoint.Lock()
+	if err != nil {
+		return nil, err
+	}
+	if len(endpoints) == 0 || endpoints[0] == nil {
+		return nil, errors.New("no known endpoint for peer")
+	}
+	// Another goroutine may have set/resolved the endpoint while we were
+	// unlocked; prefer whatever is already cached over clobbering it.
+	if peer.endpoint.val == nil {
+		peer.endpoint.val = endpoints[0]
+	}
+	return peer.endpoint.val, nil
+}
+
 func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error {
 	peer.device.net.RLock()
 	defer peer.device.net.RUnlock()
@@ -124,10 +166,10 @@ func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error {
 	}
 
 	peer.endpoint.Lock()
-	endpoint := peer.endpoint.val
-	if endpoint == nil {
+	endpoint, err := peer.resolveEndpointLocked()
+	if err != nil {
 		peer.endpoint.Unlock()
-		return errors.New("no known endpoint for peer")
+		return err
 	}
 	if peer.endpoint.clearSrcOnTx {
 		endpoint.ClearSrc()
@@ -135,7 +177,7 @@ func (peer *Peer) SendBuffersWithoutModify(buffers [][]byte) error {
 	}
 	peer.endpoint.Unlock()
 	//Hiddify-GFW-knocker
-	err := peer.device.net.bind.SendWithoutModify(buffers, endpoint, MessageEncapsulatingTransportSize)
+	err = peer.device.net.bind.SendWithoutModify(buffers, endpoint, MessageEncapsulatingTransportSize)
 	if err == nil {
 		var totalLen uint64
 		for _, b := range buffers {
@@ -158,10 +200,10 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 
 	peer.endpoint.Lock()
-	endpoint := peer.endpoint.val
-	if endpoint == nil {
+	endpoint, err := peer.resolveEndpointLocked()
+	if err != nil {
 		peer.endpoint.Unlock()
-		return errors.New("no known endpoint for peer")
+		return err
 	}
 	if peer.endpoint.clearSrcOnTx {
 		endpoint.ClearSrc()
@@ -169,7 +211,7 @@ func (peer *Peer) SendBuffers(buffers [][]byte) error {
 	}
 	peer.endpoint.Unlock()
 
-	err := peer.device.net.bind.Send(buffers, endpoint, MessageEncapsulatingTransportSize)
+	err = peer.device.net.bind.Send(buffers, endpoint, MessageEncapsulatingTransportSize)
 	if err == nil {
 		var totalLen uint64
 		for _, b := range buffers {

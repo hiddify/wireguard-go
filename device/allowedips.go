@@ -315,3 +315,19 @@ func (table *AllowedIPs) Lookup(ip []byte) *Peer {
 		panic(errors.New("looking up unknown address type"))
 	}
 }
+
+// LookupFromPacket resolves the peer whose allowed-IPs cover dst. src and
+// packet are accepted for callers that may in the future want
+// source-address- or payload-aware routing policy, but are currently
+// unused — this is otherwise identical to Lookup(dst.AsSlice()).
+func (table *AllowedIPs) LookupFromPacket(src netip.Addr, dst netip.Addr, packet []byte) *Peer {
+	if !dst.IsValid() {
+		return nil
+	}
+	if dst.Is4() {
+		b := dst.As4()
+		return table.Lookup(b[:])
+	}
+	b := dst.As16()
+	return table.Lookup(b[:])
+}
