@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/device/awg"
 )
 
 type Peer struct {
@@ -114,6 +115,16 @@ func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
 	device.peers.keyMap[pk] = peer
 
 	return peer, nil
+}
+
+func (peer *Peer) SendAndCountBuffers(buffers [][]byte) error {
+	err := peer.SendBuffers(buffers)
+	if err == nil {
+		awg.PacketCounter.Add(uint64(len(buffers)))
+		return nil
+	}
+
+	return err
 }
 
 // SetEndpointResolver installs resolve as the peer's on-demand endpoint

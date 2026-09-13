@@ -125,6 +125,7 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 		}
 		deathSpiral = 0
 
+		device.awg.ASecMux.RLock()
 		// handle each packet in the batch
 		for i, size := range sizes[:count] {
 			if size < MinMessageSize {
@@ -134,7 +135,42 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 			// check size of packet
 
 			packet := bufsArrs[i][:size]
-			msgType := binary.LittleEndian.Uint32(packet[:4])
+			var msgType uint32
+			if device.isAWG() {
+				if assumedMsgType, ok := packetSizeToMsgType[size]; ok {
+					junkSize := msgTypeToJunkSize[assumedMsgType]
+					// transport size can align with other header types;
+					// making sure we have the right msgType
+					msgType = binary.LittleEndian.Uint32(packet[junkSize : junkSize+4])
+					if msgType == assumedMsgType {
+						packet = packet[junkSize:]
+					} else {
+						device.log.Verbosef("transport packet lined up with another msg type")
+						msgType = binary.LittleEndian.Uint32(packet[:4])
+					}
+				} else {
+					transportJunkSize := device.awg.ASecCfg.TransportHeaderJunkSize
+					if transportJunkSize+4 > size {
+						device.log.Verbosef("aSec: packet too small for transport junk header")
+						continue
+					}
+					msgType = binary.LittleEndian.Uint32(packet[transportJunkSize : transportJunkSize+4])
+					if msgType != MessageTransportType {
+						// probably a junk packet
+						device.log.Verbosef("aSec: Received message with unknown type: %d", msgType)
+						continue
+					}
+
+					// remove junk from bufsArrs by shifting the packet;
+					// this buffer is also used for decryption, so it needs to be corrected
+					copy(bufsArrs[i][:size], packet[transportJunkSize:])
+					size -= transportJunkSize
+					// need to reinitialize packet as well
+					packet = bufsArrs[i][:size]
+				}
+			} else {
+				msgType = binary.LittleEndian.Uint32(packet[:4])
+			}
 
 			switch msgType {
 
@@ -219,6 +255,7 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 			default:
 			}
 		}
+		device.awg.ASecMux.RUnlock()
 		for peer, elemsContainer := range elemsByPeer {
 			if peer.isRunning.Load() {
 				peer.queue.inbound.c <- elemsContainer
