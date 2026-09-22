@@ -51,6 +51,8 @@ type Bind interface {
 	// additional encapsulation. The length of bufs must not exceed BatchSize().
 	Send(bufs [][]byte, ep Endpoint, offset int) error
 
+	SendWithoutModify(bufs [][]byte, ep Endpoint, offset int) error //Hiddify-GFW-knocker
+
 	// ParseEndpoint creates a new endpoint from a string.
 	ParseEndpoint(s string) (Endpoint, error)
 

@@ -6,14 +6,17 @@
 package device
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/tun"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
@@ -128,15 +131,60 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		return err
 	}
 
-	buf := make([]byte, MessageEncapsulatingTransportSize+MessageInitiationSize)
+	var junkedHeader []byte
+	if peer.device.version >= VersionAwg {
+		var junks [][]byte
+		if peer.device.version == VersionAwgSpecialHandshake {
+			peer.device.awg.ASecMux.RLock()
+			junks = peer.device.awg.HandshakeHandler.GenerateSpecialJunk()
+			if junks == nil {
+				junks = peer.device.awg.HandshakeHandler.GenerateControlledJunk()
+				if junks != nil {
+					peer.device.log.Verbosef("%v - Controlled junks sent", peer)
+				}
+			} else {
+				peer.device.log.Verbosef("%v - Special junks sent", peer)
+			}
+			peer.device.awg.ASecMux.RUnlock()
+		} else {
+			junks = make([][]byte, 0, peer.device.awg.ASecCfg.JunkPacketCount)
+		}
+		peer.device.awg.ASecMux.RLock()
+		err = peer.device.awg.JunkCreator.CreateJunkPackets(&junks)
+		peer.device.awg.ASecMux.RUnlock()
+		if err != nil {
+			peer.device.log.Errorf("%v - %v", peer, err)
+			return err
+		}
+
+		if len(junks) > 0 {
+			err = peer.SendBuffers(junks)
+			if err != nil {
+				peer.device.log.Errorf("%v - Failed to send junk packets: %v", peer, err)
+				return err
+			}
+		}
+
+		junkedHeader, err = peer.device.awg.CreateInitHeaderJunk()
+		if err != nil {
+			peer.device.log.Errorf("%v - %v", peer, err)
+			return err
+		}
+	}
+
+	buf := make([]byte, MessageEncapsulatingTransportSize+len(junkedHeader)+MessageInitiationSize)
 	packet := buf[MessageEncapsulatingTransportSize:]
-	_ = msg.marshal(packet)
-	peer.cookieGenerator.AddMacs(packet)
+	n := copy(packet, junkedHeader)
+	_ = msg.marshal(packet[n:])
+	peer.cookieGenerator.AddMacs(packet[n:])
 
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	err = peer.SendBuffers([][]byte{buf})
+	if err = peer.sendNoise(); err != nil {
+		return err
+	}
+	err = peer.SendAndCountBuffers([][]byte{buf})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake initiation: %v", peer, err)
 	}
@@ -158,10 +206,20 @@ func (peer *Peer) SendHandshakeResponse() error {
 		return err
 	}
 
-	buf := make([]byte, MessageEncapsulatingTransportSize+MessageResponseSize)
+	var junkedHeader []byte
+	if peer.device.version >= VersionAwg {
+		junkedHeader, err = peer.device.awg.CreateResponseHeaderJunk()
+		if err != nil {
+			peer.device.log.Errorf("%v - %v", peer, err)
+			return err
+		}
+	}
+
+	buf := make([]byte, MessageEncapsulatingTransportSize+len(junkedHeader)+MessageResponseSize)
 	packet := buf[MessageEncapsulatingTransportSize:]
-	_ = response.marshal(packet)
-	peer.cookieGenerator.AddMacs(packet)
+	n := copy(packet, junkedHeader)
+	_ = response.marshal(packet[n:])
+	peer.cookieGenerator.AddMacs(packet[n:])
 
 	err = peer.BeginSymmetricSession()
 	if err != nil {
@@ -174,7 +232,7 @@ func (peer *Peer) SendHandshakeResponse() error {
 	peer.timersAnyAuthenticatedPacketSent()
 
 	// TODO: allocation could be avoided
-	err = peer.SendBuffers([][]byte{buf})
+	err = peer.SendAndCountBuffers([][]byte{buf})
 	if err != nil {
 		peer.device.log.Errorf("%v - Failed to send handshake response: %v", peer, err)
 	}
@@ -191,9 +249,19 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 		return err
 	}
 
-	buf := make([]byte, MessageEncapsulatingTransportSize+MessageCookieReplySize)
+	var junkedHeader []byte
+	if device.isAWG() {
+		junkedHeader, err = device.awg.CreateCookieReplyHeaderJunk()
+		if err != nil {
+			device.log.Errorf("%v", err)
+			return err
+		}
+	}
+
+	buf := make([]byte, MessageEncapsulatingTransportSize+len(junkedHeader)+MessageCookieReplySize)
 	packet := buf[MessageEncapsulatingTransportSize:]
-	_ = reply.marshal(packet)
+	n := copy(packet, junkedHeader)
+	_ = reply.marshal(packet[n:])
 	// TODO: allocation could be avoided
 	device.net.bind.Send([][]byte{buf}, initiatingElem.endpoint, MessageEncapsulatingTransportSize)
 
@@ -639,7 +707,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 		peer.timersAnyAuthenticatedPacketTraversal()
 		peer.timersAnyAuthenticatedPacketSent()
 
-		err := peer.SendBuffers(bufs)
+		err := peer.SendAndCountBuffers(bufs)
 		if dataSent {
 			peer.timersDataSent()
 		}
@@ -663,4 +731,76 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 
 		peer.keepKeyFreshSending()
 	}
+}
+
+func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error {
+	//{GFW-knocker
+	var a2 []byte
+	if len(clist) > 0 {
+		a1 := clist[hiddify.RandBetween(0, int64(len(clist)-1))]
+		a2 = []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
+	} else {
+		a2 = []byte{0x00, 0x00, 0x00, 0x01, 0x08}
+	}
+	a3 := make([]byte, 8)
+	_, err3 := rand.Read(a3)
+	if err3 != nil {
+		return err3
+	}
+	a4 := []byte{0x00, 0x00, 0x44, 0xD0}
+
+	finalPacket := make([]byte, 0, len(payload)+len(a2)+len(a3)+len(a4))
+	finalPacket = append(finalPacket, a2...)
+	finalPacket = append(finalPacket, a3...)
+	finalPacket = append(finalPacket, a4...)
+	finalPacket = append(finalPacket, payload...)
+	//GFW-knocker}
+	// Send the random packet
+	if noModify {
+		return peer.SendBuffersWithoutModify([][]byte{finalPacket})
+	} else {
+		return peer.SendBuffers([][]byte{finalPacket})
+	}
+}
+
+func (peer *Peer) sendNoise() error {
+	if !peer.device.HNoise.FakePacket.Enabled {
+		return nil
+	}
+	fakePacketsCount := peer.device.HNoise.FakePacket.Count
+	fakePacketsDelays := peer.device.HNoise.FakePacket.Delay
+	fakePacketsSize := peer.device.HNoise.FakePacket.Size
+	if fakePacketsCount.To == 0 || fakePacketsSize.To == 0 {
+		return nil
+	}
+
+	numPackets := fakePacketsCount.Rand()
+	for i := 0; i < numPackets; i++ {
+		if peer.device.isClosed() || !peer.isRunning.Load() {
+			return nil
+		}
+		// Generate a random packet size between 10 and 40 bytes
+		payloadSize := fakePacketsSize.Rand()
+		randomPayload := make([]byte, payloadSize)
+		_, err := rand.Read(randomPayload)
+		if err != nil {
+			return fmt.Errorf("error generating random packet: %v", err)
+		}
+		peer.customSend(peer.device.HNoise.FakePacket.Header, randomPayload, peer.device.HNoise.FakePacket.NoModify)
+		if err != nil {
+			return fmt.Errorf("error sending random packet: %v", err)
+		}
+		if i < numPackets-1 {
+			select {
+			case <-peer.device.stopCh:
+				return nil
+			case <-peer.device.closed:
+				return nil
+			case <-time.After(time.Duration(fakePacketsDelays.Rand()) * time.Millisecond):
+			}
+
+		}
+	}
+	return nil
+
 }

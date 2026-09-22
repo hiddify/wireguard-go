@@ -54,10 +54,17 @@ const (
 )
 
 const (
-	MessageInitiationType  = 1
-	MessageResponseType    = 2
-	MessageCookieReplyType = 3
-	MessageTransportType   = 4
+	DefaultMessageInitiationType  uint32 = 1
+	DefaultMessageResponseType    uint32 = 2
+	DefaultMessageCookieReplyType uint32 = 3
+	DefaultMessageTransportType   uint32 = 4
+)
+
+var (
+	MessageInitiationType  uint32 = DefaultMessageInitiationType
+	MessageResponseType    uint32 = DefaultMessageResponseType
+	MessageCookieReplyType uint32 = DefaultMessageCookieReplyType
+	MessageTransportType   uint32 = DefaultMessageTransportType
 )
 
 const (
@@ -75,6 +82,11 @@ const (
 	MessageTransportOffsetReceiver = 4
 	MessageTransportOffsetCounter  = 8
 	MessageTransportOffsetContent  = 16
+)
+
+var (
+	packetSizeToMsgType map[int]uint32
+	msgTypeToJunkSize   map[uint32]int
 )
 
 /* Type is an 8-bit field, followed by 3 nul bytes,
