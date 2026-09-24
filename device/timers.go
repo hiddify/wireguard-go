@@ -23,24 +23,31 @@ type Timer struct {
 	modifyingLock sync.RWMutex
 	runningLock   sync.Mutex
 	isPending     bool
+	deadline      time.Time
+	generation    uint64
+	deferred      bool
+	pause         *timerPauseManager
 }
 
 func (peer *Peer) NewTimer(expirationFunction func(*Peer)) *Timer {
-	timer := &Timer{}
+	timer := &Timer{pause: peer.device.timerPause}
 	timer.Timer = time.AfterFunc(time.Hour, func() {
 		timer.runningLock.Lock()
 		defer timer.runningLock.Unlock()
 
 		timer.modifyingLock.Lock()
-		if !timer.isPending {
+		// Reset can leave an old callback queued behind runningLock. It must
+		// not consume a later arm before its deadline.
+		if !timer.isPending || time.Now().Before(timer.deadline) {
 			timer.modifyingLock.Unlock()
 			return
 		}
 		timer.isPending = false
+		deferred := timer.pause.deferTimer(timer, timer.generation)
+		timer.deferred = deferred
 		timer.modifyingLock.Unlock()
-
-		if pauseManager := peer.device.pauseManager; pauseManager != nil {
-			pauseManager.WaitActive()
+		if deferred {
+			return
 		}
 		expirationFunction(peer)
 	})
@@ -50,16 +57,41 @@ func (peer *Peer) NewTimer(expirationFunction func(*Peer)) *Timer {
 
 func (timer *Timer) Mod(d time.Duration) {
 	timer.modifyingLock.Lock()
+	timer.generation++
+	if timer.deferred {
+		timer.pause.forgetTimer(timer)
+		timer.deferred = false
+	}
 	timer.isPending = true
+	timer.deadline = time.Now().Add(d)
 	timer.Reset(d)
 	timer.modifyingLock.Unlock()
 }
 
 func (timer *Timer) Del() {
 	timer.modifyingLock.Lock()
+	timer.generation++
+	if timer.deferred {
+		timer.pause.forgetTimer(timer)
+		timer.deferred = false
+	}
 	timer.isPending = false
 	timer.Stop()
 	timer.modifyingLock.Unlock()
+}
+
+// resume only rearms the expiration that was deferred. Mod and Del invalidate
+// a wakeup even if it has already been removed from the deferred timer queue.
+func (timer *Timer) resume(generation uint64) {
+	timer.modifyingLock.Lock()
+	defer timer.modifyingLock.Unlock()
+	if timer.generation != generation {
+		return
+	}
+	timer.deferred = false
+	timer.isPending = true
+	timer.deadline = time.Now()
+	timer.Reset(0)
 }
 
 func (timer *Timer) DelSync() {
