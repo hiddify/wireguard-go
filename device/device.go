@@ -134,10 +134,10 @@ type Device struct {
 		mtu    atomic.Int32
 	}
 
-	ipcMutex     sync.RWMutex
-	closed       chan struct{}
-	log          *Logger
-	pauseManager pause.Manager
+	ipcMutex   sync.RWMutex
+	closed     chan struct{}
+	log        *Logger
+	timerPause *timerPauseManager
 
 	HNoise hiddify.NoiseOptions //H
 	stopCh chan int             //H
@@ -347,7 +347,7 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 func NewDevice(ctx context.Context, tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int) *Device {
 	device := new(Device)
 	device.stopCh = make(chan int, 1) //H
-	device.pauseManager = service.FromContext[pause.Manager](ctx)
+	device.timerPause = newTimerPauseManager(ctx, service.FromContext[pause.Manager](ctx))
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
 	device.log = logger
@@ -672,6 +672,8 @@ func (device *Device) SetEndpointResolverFunc(f PeerEndpointResolverFunc) {
 }
 
 func (device *Device) Close() {
+	// Unregister outside the device locks: a pause callback may call Down.
+	device.timerPause.Close()
 	device.state.Lock()
 	defer device.state.Unlock()
 	device.ipcMutex.Lock()
