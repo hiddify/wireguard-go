@@ -23,6 +23,13 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
+//go:noinline
+func messageTransportType() uint32 {
+	// Separate load from LittleEndian.PutUint32: on s390x the compiler can
+	// otherwise emit an illegal MOVWBR of MessageTransportType(SB).
+	return MessageTransportType
+}
+
 /* Outbound flow
  *
  * 1. TUN queue
@@ -639,7 +646,7 @@ func (device *Device) RoutineEncryption(id int) {
 			fieldReceiver := header[4:8]
 			fieldNonce := header[8:16]
 
-			binary.LittleEndian.PutUint32(fieldType, MessageTransportType)
+			binary.LittleEndian.PutUint32(fieldType, messageTransportType())
 			binary.LittleEndian.PutUint32(fieldReceiver, elem.keypair.remoteIndex)
 			binary.LittleEndian.PutUint64(fieldNonce, elem.nonce)
 
