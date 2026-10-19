@@ -116,7 +116,7 @@ func (peer *Peer) SendPriorityMessage() {
 		return
 	}
 	keypair := peer.keypairs.Current()
-	if keypair == nil || keypair.sendNonce.Load() >= RejectAfterMessages || time.Since(keypair.created) >= RejectAfterTime {
+	if keypair == nil || keypair.sendNonce.Load() >= RejectAfterMessages || sinceIncludingSleep(keypair.created) >= RejectAfterTime {
 		// SendStagedPackets initializes a handshake when the keypair is invalid,
 		// but we explicitly avoid that here. A priority message is only intended
 		// to flow around symmetric session establishment, but it should never
@@ -177,14 +177,14 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	}
 
 	peer.handshake.mutex.RLock()
-	if time.Since(peer.handshake.lastSentHandshake) < RekeyTimeout {
+	if sinceIncludingSleep(peer.handshake.lastSentHandshake) < RekeyTimeout {
 		peer.handshake.mutex.RUnlock()
 		return nil
 	}
 	peer.handshake.mutex.RUnlock()
 
 	peer.handshake.mutex.Lock()
-	if time.Since(peer.handshake.lastSentHandshake) < RekeyTimeout {
+	if sinceIncludingSleep(peer.handshake.lastSentHandshake) < RekeyTimeout {
 		peer.handshake.mutex.Unlock()
 		return nil
 	}
@@ -283,7 +283,7 @@ func (peer *Peer) keepKeyFreshSending() {
 		return
 	}
 	nonce := keypair.sendNonce.Load()
-	if nonce > RekeyAfterMessages || (keypair.isInitiator && time.Since(keypair.created) > RekeyAfterTime) {
+	if nonce > RekeyAfterMessages || (keypair.isInitiator && sinceIncludingSleep(keypair.created) > RekeyAfterTime) {
 		peer.SendHandshakeInitiation(false)
 	}
 }
@@ -578,7 +578,7 @@ top:
 	}
 
 	keypair := peer.keypairs.Current()
-	if keypair == nil || keypair.sendNonce.Load() >= RejectAfterMessages || time.Since(keypair.created) >= RejectAfterTime {
+	if keypair == nil || keypair.sendNonce.Load() >= RejectAfterMessages || sinceIncludingSleep(keypair.created) >= RejectAfterTime {
 		peer.SendHandshakeInitiation(false)
 		return
 	}

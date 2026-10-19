@@ -75,6 +75,11 @@ func (timer *Timer) IsPending() bool {
 	return timer.isPending
 }
 
+func sinceIncludingSleep(t time.Time) time.Duration {
+	now := time.Now()
+	return max(now.Sub(t), now.Round(0).Sub(t))
+}
+
 func (peer *Peer) timersActive() bool {
 	return peer.isRunning.Load() && peer.device != nil && peer.device.isUp()
 }
