@@ -95,6 +95,6 @@ func RandBetween(from int64, to int64) int64 {
 	if from > to {
 		from, to = to, from
 	}
-	bigInt, _ := rand.Int(rand.Reader, big.NewInt(to-from))
+	bigInt, _ := rand.Int(rand.Reader, big.NewInt(to-from+1)) // inclusive of to
 	return from + bigInt.Int64()
 }
