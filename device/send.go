@@ -942,7 +942,9 @@ func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool, candid
 	}
 	a4 := []byte{0x00, 0x00, 0x44, 0xD0}
 
-	finalPacket := make([]byte, 0, len(payload)+len(a2)+len(a3)+len(a4))
+	// H: the bind sends each buffer from MessageEncapsulatingTransportSize on, as for transport
+	// messages; without that headroom it cut the start of the fake packet
+	finalPacket := make([]byte, MessageEncapsulatingTransportSize, MessageEncapsulatingTransportSize+len(payload)+len(a2)+len(a3)+len(a4)) //H
 	finalPacket = append(finalPacket, a2...)
 	finalPacket = append(finalPacket, a3...)
 	finalPacket = append(finalPacket, a4...)
