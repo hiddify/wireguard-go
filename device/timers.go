@@ -138,8 +138,12 @@ func expiredRetransmitHandshake(peer *Peer) {
 			peer.timers.zeroKeyMaterial.Mod(RejectAfterTime * 3)
 		}
 		peer.noteSessionHandshakeStopped()
+		peer.rebindAfterFailedHandshake("giveup") //H
 	} else {
-		peer.timers.handshakeAttempts.Add(1)
+		attempts := peer.timers.handshakeAttempts.Add(1)            //H
+		if attempts >= earlyRebindAttempts && peer.sessionStale() { //H
+			peer.rebindAfterFailedHandshake("early") //H
+		} //H
 		peer.device.log.Verbosef("%s - Handshake did not complete after %d seconds, retrying (try %d)", peer, int(RekeyTimeout.Seconds()), peer.timers.handshakeAttempts.Load()+1)
 
 		/* We clear the endpoint address src address, in case this is the cause of trouble. */

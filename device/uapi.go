@@ -272,6 +272,7 @@ func (device *Device) handleDeviceLine(key, value string, tempAwg *awg.Protocol)
 
 		device.net.Lock()
 		device.net.port = uint16(port)
+		device.net.configuredPort = uint16(port) //H
 		device.net.Unlock()
 
 		if err := device.BindUpdate(); err != nil {

@@ -82,12 +82,14 @@ type Device struct {
 	net struct {
 		stopping sync.WaitGroup
 		sync.RWMutex
-		bind          conn.Bind // bind interface
-		netlinkCancel *rwcancel.RWCancel
-		port          uint16 // listening port
-		fwmark        uint32 // mark value (0 = disabled)
-		brokenRoaming bool
-		rebindPending atomic.Bool
+		bind                conn.Bind // bind interface
+		netlinkCancel       *rwcancel.RWCancel
+		port                uint16 // listening port
+		fwmark              uint32 // mark value (0 = disabled)
+		brokenRoaming       bool
+		rebindPending       atomic.Bool
+		configuredPort      uint16       //H: listen_port as configured; 0 for an ephemeral port
+		lastHandshakeRebind atomic.Int64 //H: unix nanoseconds of the last rebind after failed handshakes
 	}
 
 	staticIdentity struct {
