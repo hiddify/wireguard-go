@@ -797,6 +797,32 @@ func (device *Device) scheduleBindUpdate() {
 	}()
 }
 
+// scheduleBindUpdateAfter reopens the bind after delay, unless the device closes first. A
+// receive routine that gives up on its socket calls it: nothing else would restart the routine,
+// and the tunnel would stop receiving until the network changed. The delay keeps a socket that
+// fails at once from spinning. //H
+func (device *Device) scheduleBindUpdateAfter(delay time.Duration) { //H
+	if !device.net.rebindPending.CompareAndSwap(false, true) { //H
+		return //H
+	} //H
+	go func() { //H
+		defer device.net.rebindPending.Store(false) //H
+		select {                                    //H
+		case <-time.After(delay): //H
+		case <-device.closed: //H
+			return //H
+		} //H
+		if device.isClosed() || !device.isUp() { //H
+			return //H
+		} //H
+		device.log.Verbosef("Receive routine gave up, reopening the bind") //H
+		err := device.BindUpdate()                                         //H
+		if err != nil {                                                    //H
+			device.log.Errorf("Failed to reopen bind: %v", err) //H
+		} //H
+	}() //H
+} //H
+
 func (device *Device) BindUpdate() error {
 	device.net.Lock()
 	defer device.net.Unlock()

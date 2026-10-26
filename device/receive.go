@@ -125,6 +125,7 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 				return
 			}
 			if neterr, ok := err.(net.Error); ok && !neterr.Temporary() {
+				device.scheduleBindUpdateAfter(time.Second) //H: nothing else restarts this routine
 				return
 			}
 			if deathSpiral < 10 {
@@ -132,6 +133,7 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 				time.Sleep(time.Second / 3)
 				continue
 			}
+			device.scheduleBindUpdateAfter(time.Second) //H
 			return
 		}
 		deathSpiral = 0
