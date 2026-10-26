@@ -205,16 +205,23 @@ again:
 	}
 
 	// Listen on the same port as we're using for ipv4.
+	v4port := port //H
 	v6conn, port, err = listenNet(s.externalControl, "udp6", port)
 	if uport == 0 && errors.Is(err, syscall.EADDRINUSE) && tries < 100 {
 		v4conn.Close()
 		tries++
 		goto again
 	}
+	if err != nil && v4conn != nil { //H: keep IPv4 when IPv6 cannot be opened (off, or no IPv6 on the bound interface)
+		v6conn, port, err = nil, v4port, nil //H
+	} //H
 	if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
 		v4conn.Close()
 		return nil, 0, err
 	}
+	if v4conn == nil && v6conn == nil { //H
+		return nil, 0, syscall.EAFNOSUPPORT //H
+	} //H
 	var fns []ReceiveFunc
 	if v4conn != nil {
 		s.ipv4TxOffload, s.ipv4RxOffload = supportsUDPOffload(v4conn)
