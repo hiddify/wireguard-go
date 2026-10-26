@@ -377,10 +377,6 @@ func (peer *Peer) ExpireCurrentKeypairs() {
 func (peer *Peer) Stop() {
 	peer.state.Lock()
 	defer peer.state.Unlock()
-	select {
-	case peer.device.stopCh <- 1: //H
-	default:
-	}
 	if !peer.isRunning.Swap(false) {
 		return
 	}

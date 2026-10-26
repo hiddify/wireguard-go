@@ -140,7 +140,6 @@ type Device struct {
 	timerPause *timerPauseManager
 
 	HNoise hiddify.NoiseOptions //H
-	stopCh chan int             //H
 
 	version Version
 	awg     awg.Protocol
@@ -346,7 +345,6 @@ func (device *Device) SetPrivateKey(sk NoisePrivateKey) error {
 
 func NewDevice(ctx context.Context, tunDevice tun.Device, bind conn.Bind, logger *Logger, workers int) *Device {
 	device := new(Device)
-	device.stopCh = make(chan int, 1) //H
 	device.timerPause = newTimerPauseManager(ctx, service.FromContext[pause.Manager](ctx))
 	device.state.state.Store(uint32(deviceStateDown))
 	device.closed = make(chan struct{})
@@ -738,10 +736,6 @@ func (device *Device) SendKeepalivesToPeersWithCurrentKeypair() {
 // closeBindLocked closes the device's net.bind.
 // The caller must hold the net mutex.
 func closeBindLocked(device *Device) error {
-	select {
-	case device.stopCh <- 1:
-	default:
-	}
 	var err error
 	netc := &device.net
 	if netc.netlinkCancel != nil {

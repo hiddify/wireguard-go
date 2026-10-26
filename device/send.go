@@ -987,9 +987,9 @@ func (peer *Peer) sendNoise(candidates []conn.Endpoint) error {
 			peer.device.log.Verbosef("%v - Failed to send noise packet: %v", peer, err)
 		}
 		if i < numPackets-1 {
+			// H: a stop or bind close is seen by the checks at the top of the loop; a buffered
+			// stop token was left over from startup and cut the noise after the first packet
 			select {
-			case <-peer.device.stopCh:
-				return nil
 			case <-peer.device.closed:
 				return nil
 			case <-time.After(time.Duration(fakePacketsDelays.Rand()) * time.Millisecond):
