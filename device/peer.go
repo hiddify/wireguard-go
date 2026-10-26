@@ -472,6 +472,12 @@ func (peer *Peer) resolveEndpoints() []conn.Endpoint {
 // sendHandshakeBuffers sends buffers to the peer's current endpoint and every
 // candidate. It succeeds when at least one endpoint accepted the send.
 func (peer *Peer) sendHandshakeBuffers(buffers [][]byte, candidates []conn.Endpoint) error {
+	return peer.sendCandidateBuffers(buffers, candidates, false)
+}
+
+// sendCandidateBuffers sends to the current endpoint and every resolved candidate, like the
+// handshake initiation; noModify sends without touching the packets (Hiddify noise). //H
+func (peer *Peer) sendCandidateBuffers(buffers [][]byte, candidates []conn.Endpoint, noModify bool) error {
 	peer.device.net.RLock()
 	defer peer.device.net.RUnlock()
 
@@ -511,7 +517,12 @@ func (peer *Peer) sendHandshakeBuffers(buffers [][]byte, candidates []conn.Endpo
 	var firstErr error
 	sent := false
 	for _, endpoint := range endpoints {
-		err := peer.device.net.bind.Send(buffers, endpoint, MessageEncapsulatingTransportSize)
+		var err error
+		if noModify {
+			err = peer.device.net.bind.SendWithoutModify(buffers, endpoint, MessageEncapsulatingTransportSize)
+		} else {
+			err = peer.device.net.bind.Send(buffers, endpoint, MessageEncapsulatingTransportSize)
+		}
 		if err == nil {
 			sent = true
 			peer.txBytes.Add(totalLen)

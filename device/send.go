@@ -238,7 +238,11 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		}
 
 		if len(junks) > 0 {
-			err = peer.SendBuffers(junks)
+			if len(candidates) > 0 {
+				err = peer.sendHandshakeBuffers(junks, candidates)
+			} else {
+				err = peer.SendBuffers(junks)
+			}
 			if err != nil {
 				peer.device.log.Errorf("%v - Failed to send junk packets: %v", peer, err)
 				return err
@@ -261,7 +265,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 	peer.timersAnyAuthenticatedPacketTraversal()
 	peer.timersAnyAuthenticatedPacketSent()
 
-	if err = peer.sendNoise(); err != nil {
+	if err = peer.sendNoise(candidates); err != nil {
 		return err
 	}
 	if len(candidates) > 0 {
@@ -922,7 +926,7 @@ func (peer *Peer) processOutboundContainer(elemsContainer *QueueOutboundElements
 	peer.keepKeyFreshSending()
 }
 
-func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error {
+func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool, candidates []conn.Endpoint) error {
 	//{GFW-knocker
 	var a2 []byte
 	if len(clist) > 0 {
@@ -945,6 +949,9 @@ func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error 
 	finalPacket = append(finalPacket, payload...)
 	//GFW-knocker}
 	// Send the random packet
+	if len(candidates) > 0 { // a peer known by its domain has no endpoint until the handshake
+		return peer.sendCandidateBuffers([][]byte{finalPacket}, candidates, noModify)
+	}
 	if noModify {
 		return peer.SendBuffersWithoutModify([][]byte{finalPacket})
 	} else {
@@ -952,7 +959,7 @@ func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool) error 
 	}
 }
 
-func (peer *Peer) sendNoise() error {
+func (peer *Peer) sendNoise(candidates []conn.Endpoint) error {
 	if !peer.device.HNoise.FakePacket.Enabled {
 		return nil
 	}
@@ -975,9 +982,9 @@ func (peer *Peer) sendNoise() error {
 		if err != nil {
 			return fmt.Errorf("error generating random packet: %v", err)
 		}
-		peer.customSend(peer.device.HNoise.FakePacket.Header, randomPayload, peer.device.HNoise.FakePacket.NoModify)
-		if err != nil {
-			return fmt.Errorf("error sending random packet: %v", err)
+		// a lost fake packet must not hold back the handshake
+		if err = peer.customSend(peer.device.HNoise.FakePacket.Header, randomPayload, peer.device.HNoise.FakePacket.NoModify, candidates); err != nil {
+			peer.device.log.Verbosef("%v - Failed to send noise packet: %v", peer, err)
 		}
 		if i < numPackets-1 {
 			select {
