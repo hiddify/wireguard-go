@@ -942,15 +942,21 @@ func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool, candid
 	}
 	a4 := []byte{0x00, 0x00, 0x44, 0xD0}
 
+	packet := make([]byte, 0, len(payload)+len(a2)+len(a3)+len(a4))
+	packet = append(packet, a2...)
+	packet = append(packet, a3...)
+	packet = append(packet, a4...)
+	packet = append(packet, payload...)
+	//GFW-knocker}
+	return peer.sendFakePacket(packet, noModify, candidates)
+}
+
+// sendFakePacket sends a noise packet as is (with noModify) or with the bind's changes.
+func (peer *Peer) sendFakePacket(packet []byte, noModify bool, candidates []conn.Endpoint) error {
 	// H: the bind sends each buffer from MessageEncapsulatingTransportSize on, as for transport
 	// messages; without that headroom it cut the start of the fake packet
-	finalPacket := make([]byte, MessageEncapsulatingTransportSize, MessageEncapsulatingTransportSize+len(payload)+len(a2)+len(a3)+len(a4)) //H
-	finalPacket = append(finalPacket, a2...)
-	finalPacket = append(finalPacket, a3...)
-	finalPacket = append(finalPacket, a4...)
-	finalPacket = append(finalPacket, payload...)
-	//GFW-knocker}
-	// Send the random packet
+	finalPacket := make([]byte, MessageEncapsulatingTransportSize, MessageEncapsulatingTransportSize+len(packet)) //H
+	finalPacket = append(finalPacket, packet...)
 	if len(candidates) > 0 { // a peer known by its domain has no endpoint until the handshake
 		return peer.sendCandidateBuffers([][]byte{finalPacket}, candidates, noModify)
 	}
@@ -968,14 +974,37 @@ func (peer *Peer) sendNoise(candidates []conn.Endpoint) error {
 	fakePacketsCount := peer.device.HNoise.FakePacket.Count
 	fakePacketsDelays := peer.device.HNoise.FakePacket.Delay
 	fakePacketsSize := peer.device.HNoise.FakePacket.Size
-	if fakePacketsCount.To == 0 || fakePacketsSize.To == 0 {
+	quicMode := peer.device.HNoise.FakePacket.Mode == hiddify.NoiseModeQUIC
+	if fakePacketsCount.To == 0 || fakePacketsSize.To == 0 && !quicMode {
 		return nil
 	}
 
 	numPackets := fakePacketsCount.Rand()
+	var quicPackets [][]byte
+	if quicMode { // H: the start of a QUIC connection to the configured SNI
+		var err error
+		quicPackets, err = hiddify.QUICInitialPackets(peer.device.HNoise.FakePacket.QUICServerName(), numPackets)
+		if err != nil {
+			return err
+		}
+	}
 	for i := 0; i < numPackets; i++ {
 		if peer.device.isClosed() || !peer.isRunning.Load() {
 			return nil
+		}
+		if quicMode {
+			// sent as is: the bind's reserved bytes would overwrite the QUIC version
+			if err := peer.sendFakePacket(quicPackets[i], true, candidates); err != nil {
+				peer.device.log.Verbosef("%v - Failed to send noise packet: %v", peer, err)
+			}
+			if i < numPackets-1 {
+				select {
+				case <-peer.device.closed:
+					return nil
+				case <-time.After(time.Duration(fakePacketsDelays.Rand()) * time.Millisecond):
+				}
+			}
+			continue
 		}
 		// Generate a random packet size between 10 and 40 bytes
 		payloadSize := fakePacketsSize.Rand()

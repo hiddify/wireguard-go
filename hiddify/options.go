@@ -14,11 +14,14 @@ type NoiseOptions struct {
 }
 
 type FakePacketOptions struct {
-	Enabled  bool   `json:"enabled,omitempty"`
-	Count    Range  `json:"count,omitempty"`
-	Size     Range  `json:"size,omitempty"`
-	Delay    Range  `json:"delay,omitempty"`
+	Enabled bool  `json:"enabled,omitempty"`
+	Count   Range `json:"count,omitempty"`
+	Size    Range `json:"size,omitempty"`
+	Delay   Range `json:"delay,omitempty"`
+	// Mode "quic" sends the start of a QUIC connection to SNI instead of random packets (see
+	// QUICInitialPackets); Size and Header are then not used.
 	Mode     string `json:"mode,omitempty"`
+	SNI      string `json:"sni,omitempty"`
 	Header   []byte `json:"header,omitempty"`
 	NoModify bool   `json:"no_modify,omitempty"`
 }
@@ -97,4 +100,18 @@ func RandBetween(from int64, to int64) int64 {
 	}
 	bigInt, _ := rand.Int(rand.Reader, big.NewInt(to-from+1)) // inclusive of to
 	return from + bigInt.Int64()
+}
+
+// NoiseModeQUIC makes the fake packets QUIC Initials (see QUICInitialPackets).
+const NoiseModeQUIC = "quic"
+
+// DefaultQUICServerName is the SNI of QUIC noise when none is set.
+const DefaultQUICServerName = "www.google.com"
+
+// QUICServerName returns the SNI of QUIC noise.
+func (o FakePacketOptions) QUICServerName() string {
+	if o.SNI != "" {
+		return o.SNI
+	}
+	return DefaultQUICServerName
 }
