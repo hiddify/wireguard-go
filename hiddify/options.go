@@ -19,11 +19,15 @@ type FakePacketOptions struct {
 	Size    Range `json:"size,omitempty"`
 	Delay   Range `json:"delay,omitempty"`
 	// Mode "quic" sends the start of a QUIC connection to SNI instead of random packets (see
-	// QUICInitialPackets); Size and Header are then not used.
-	Mode     string `json:"mode,omitempty"`
-	SNI      string `json:"sni,omitempty"`
-	Header   []byte `json:"header,omitempty"`
-	NoModify bool   `json:"no_modify,omitempty"`
+	// QUICInitialPackets); Size and Header are then not used. Mode "raw" sends Size random bytes
+	// with no header, as Xray's random noise and AmneziaWG's junk packets.
+	Mode string `json:"mode,omitempty"`
+	// Packets are sent first, in order and as they are: templates in the AmneziaWG I1–I5 syntax
+	// (see ExpandPacket), such as a DNS query or a SIP INVITE.
+	Packets  []string `json:"packets,omitempty"`
+	SNI      string   `json:"sni,omitempty"`
+	Header   []byte   `json:"header,omitempty"`
+	NoModify bool     `json:"no_modify,omitempty"`
 }
 
 type Range struct {

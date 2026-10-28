@@ -6,7 +6,6 @@
 package device
 
 import (
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/sagernet/wireguard-go/conn"
 	"github.com/sagernet/wireguard-go/device/awg"
-	"github.com/sagernet/wireguard-go/hiddify"
 	"github.com/sagernet/wireguard-go/tun"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
@@ -926,31 +924,6 @@ func (peer *Peer) processOutboundContainer(elemsContainer *QueueOutboundElements
 	peer.keepKeyFreshSending()
 }
 
-func (peer *Peer) customSend(clist []byte, payload []byte, noModify bool, candidates []conn.Endpoint) error {
-	//{GFW-knocker
-	var a2 []byte
-	if len(clist) > 0 {
-		a1 := clist[hiddify.RandBetween(0, int64(len(clist)-1))]
-		a2 = []byte{a1, 0x00, 0x00, 0x00, 0x01, 0x08}
-	} else {
-		a2 = []byte{0x00, 0x00, 0x00, 0x01, 0x08}
-	}
-	a3 := make([]byte, 8)
-	_, err3 := rand.Read(a3)
-	if err3 != nil {
-		return err3
-	}
-	a4 := []byte{0x00, 0x00, 0x44, 0xD0}
-
-	packet := make([]byte, 0, len(payload)+len(a2)+len(a3)+len(a4))
-	packet = append(packet, a2...)
-	packet = append(packet, a3...)
-	packet = append(packet, a4...)
-	packet = append(packet, payload...)
-	//GFW-knocker}
-	return peer.sendFakePacket(packet, noModify, candidates)
-}
-
 // sendFakePacket sends a noise packet as is (with noModify) or with the bind's changes.
 func (peer *Peer) sendFakePacket(packet []byte, noModify bool, candidates []conn.Endpoint) error {
 	// H: the bind sends each buffer from MessageEncapsulatingTransportSize on, as for transport
@@ -968,66 +941,27 @@ func (peer *Peer) sendFakePacket(packet []byte, noModify bool, candidates []conn
 }
 
 func (peer *Peer) sendNoise(candidates []conn.Endpoint) error {
-	if !peer.device.HNoise.FakePacket.Enabled {
-		return nil
+	packets, err := peer.device.HNoise.FakePacket.Build() //H: the templates, then the packets of the mode
+	if err != nil {
+		return err
 	}
-	fakePacketsCount := peer.device.HNoise.FakePacket.Count
-	fakePacketsDelays := peer.device.HNoise.FakePacket.Delay
-	fakePacketsSize := peer.device.HNoise.FakePacket.Size
-	quicMode := peer.device.HNoise.FakePacket.Mode == hiddify.NoiseModeQUIC
-	if fakePacketsCount.To == 0 || fakePacketsSize.To == 0 && !quicMode {
-		return nil
-	}
-
-	numPackets := fakePacketsCount.Rand()
-	var quicPackets [][]byte
-	if quicMode { // H: the start of a QUIC connection to the configured SNI
-		var err error
-		quicPackets, err = hiddify.QUICInitialPackets(peer.device.HNoise.FakePacket.QUICServerName(), numPackets)
-		if err != nil {
-			return err
-		}
-	}
-	for i := 0; i < numPackets; i++ {
+	for _, packet := range packets {
 		if peer.device.isClosed() || !peer.isRunning.Load() {
 			return nil
 		}
-		if quicMode {
-			// sent as is: the bind's reserved bytes would overwrite the QUIC version
-			if err := peer.sendFakePacket(quicPackets[i], true, candidates); err != nil {
-				peer.device.log.Verbosef("%v - Failed to send noise packet: %v", peer, err)
-			}
-			if i < numPackets-1 {
-				select {
-				case <-peer.device.closed:
-					return nil
-				case <-time.After(time.Duration(fakePacketsDelays.Rand()) * time.Millisecond):
-				}
-			}
-			continue
-		}
-		// Generate a random packet size between 10 and 40 bytes
-		payloadSize := fakePacketsSize.Rand()
-		randomPayload := make([]byte, payloadSize)
-		_, err := rand.Read(randomPayload)
-		if err != nil {
-			return fmt.Errorf("error generating random packet: %v", err)
-		}
 		// a lost fake packet must not hold back the handshake
-		if err = peer.customSend(peer.device.HNoise.FakePacket.Header, randomPayload, peer.device.HNoise.FakePacket.NoModify, candidates); err != nil {
+		if err := peer.sendFakePacket(packet.Data, packet.NoModify, candidates); err != nil {
 			peer.device.log.Verbosef("%v - Failed to send noise packet: %v", peer, err)
 		}
-		if i < numPackets-1 {
+		if packet.Delay > 0 {
 			// H: a stop or bind close is seen by the checks at the top of the loop; a buffered
 			// stop token was left over from startup and cut the noise after the first packet
 			select {
 			case <-peer.device.closed:
 				return nil
-			case <-time.After(time.Duration(fakePacketsDelays.Rand()) * time.Millisecond):
+			case <-time.After(packet.Delay):
 			}
-
 		}
 	}
 	return nil
-
 }
