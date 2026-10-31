@@ -27,6 +27,7 @@ type FakePacket struct {
 // order, then Count packets of the mode. The device and the WARP scanner's probe both send these,
 // so a probe looks like the device's handshake.
 func (o FakePacketOptions) Build() ([]FakePacket, error) {
+	o = o.WithPreset()
 	if !o.Enabled {
 		return nil, nil
 	}
@@ -71,6 +72,7 @@ func (o FakePacketOptions) Build() ([]FakePacket, error) {
 
 // Validate reports a template that cannot be expanded, when the config is read.
 func (o FakePacketOptions) Validate() error {
+	o = o.WithPreset()
 	for i, template := range o.Packets {
 		if _, err := ExpandPacket(template); err != nil {
 			return fmt.Errorf("noise packet %d: %w", i+1, err)
