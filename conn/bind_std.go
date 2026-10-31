@@ -465,13 +465,19 @@ func (e ErrUDPGSODisabled) Unwrap() error {
 	return e.RetryErr
 }
 
+// SendWithoutModify sends noise packets as they are: the reserved bytes belong to WireGuard
+// messages only. //H
 func (s *StdNetBind) SendWithoutModify(bufs [][]byte, endpoint Endpoint, offset int) error {
-	return s.Send(bufs, endpoint, offset)
+	return s.sendBufs(bufs, endpoint, offset, false) //H
 }
 
 func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
+	return s.sendBufs(bufs, endpoint, offset, true) //H
+} //H
+
+func (s *StdNetBind) sendBufs(bufs [][]byte, endpoint Endpoint, offset int, modify bool) error { //H
 	for len(bufs) > IdealBatchSize {
-		err := s.Send(bufs[:IdealBatchSize], endpoint, offset)
+		err := s.sendBufs(bufs[:IdealBatchSize], endpoint, offset, modify) //H
 		if err != nil {
 			return err
 		}
@@ -522,7 +528,7 @@ func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
 	s.reservedAccess.RLock()
 	reserved, reservedLoaded := s.reservedForEndpoint[standardEndpoint.AddrPort]
 	s.reservedAccess.RUnlock()
-	if reservedLoaded {
+	if reservedLoaded && modify { //H
 		for _, buf := range bufs {
 			if len(buf) > offset+3 {
 				copy(buf[offset+1:offset+4], reserved[:])
