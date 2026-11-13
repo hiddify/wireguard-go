@@ -41,6 +41,7 @@ type StdNetBind struct {
 	egressProvider      EgressProvider
 	onRead              func(size int)
 	onWrite             func(size int)
+	ephemeralPort       uint16 //H: the port the last Open without one picked, see h_bind_std_port.go
 	reservedAccess      sync.RWMutex
 	reservedForEndpoint map[netip.AddrPort][3]uint8
 
@@ -190,6 +191,7 @@ func (s *StdNetBind) Open(uport uint16) ([]ReceiveFunc, uint16, error) {
 		return nil, 0, ErrBindAlreadyOpen
 	}
 	s.msgx.reset()
+	uport = s.requestedPort(uport) //H
 
 	// Attempt to open ipv4 and ipv6 listeners on the same port.
 	// If uport is 0, we can retry on failure.
@@ -206,7 +208,7 @@ again:
 
 	// Listen on the same port as we're using for ipv4.
 	v4port := port //H
-	v6conn, port, err = listenNet(s.externalControl, "udp6", port)
+	v6conn, port, err = listenNet(s.externalControl, "udp6", ipv6Port(uport, port)) //H
 	if uport == 0 && errors.Is(err, syscall.EADDRINUSE) && tries < 100 {
 		v4conn.Close()
 		tries++
@@ -222,6 +224,7 @@ again:
 	if v4conn == nil && v6conn == nil { //H
 		return nil, 0, syscall.EAFNOSUPPORT //H
 	} //H
+	port = int(s.openedPort(uport, v4conn, v4port, port)) //H
 	var fns []ReceiveFunc
 	if v4conn != nil {
 		s.ipv4TxOffload, s.ipv4RxOffload = supportsUDPOffload(v4conn)

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"net"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -82,5 +84,59 @@ func TestH_StdNetBindSendWithoutModifyKeepsReservedBytes(t *testing.T) {
 	}
 	if got, want := receive(), []byte{0x01, 0x57, 0x3d, 0x35, 0xaa, 0xbb}; !bytes.Equal(got, want) {
 		t.Fatalf("WireGuard message without the reserved bytes: want %x, got %x", want, got)
+	}
+}
+
+// recordBinds returns a control function that records the address every socket is bound to.
+func recordBinds(addresses *[]string) func(network, address string, conn syscall.RawConn) error {
+	return func(network, address string, conn syscall.RawConn) error {
+		*addresses = append(*addresses, network+" "+address)
+		return nil
+	}
+}
+
+// A bind opened without a port binds every socket to port 0, each family its own ephemeral port:
+// Windows asks the user to allow the app through its firewall for a UDP socket bound to an
+// explicit port (the IPv6 socket on the IPv4 socket's port, as wireguard-go did), never for port
+// 0. Opening it again with the port it picked (the device does so on every network change) still
+// picks a new one; a port asked for (listen_port) is bound as it is.
+func TestH_StdNetBindEphemeralPortsStayEphemeral(t *testing.T) {
+	var addresses []string
+	bind := NewStdNetBind(recordBinds(&addresses)).(*StdNetBind)
+	_, port, err := bind.Open(0)
+	if err != nil {
+		t.Fatalf("open failed: %v", err)
+	}
+	if port == 0 {
+		t.Fatal("no port returned")
+	}
+	bind.Close()
+	if _, _, err = bind.Open(port); err != nil {
+		t.Fatalf("open again failed: %v", err)
+	}
+	bind.Close()
+	for _, address := range addresses {
+		if !strings.HasSuffix(address, ":0") {
+			t.Fatalf("a socket was bound to an explicit port: %q (all: %q)", address, addresses)
+		}
+	}
+
+	listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := uint16(listener.LocalAddr().(*net.UDPAddr).Port)
+	listener.Close()
+	addresses = nil
+	_, port, err = bind.Open(fixed)
+	if err != nil {
+		t.Fatalf("open on port %d failed: %v", fixed, err)
+	}
+	defer bind.Close()
+	if port != fixed {
+		t.Fatalf("asked for port %d, got %d", fixed, port)
+	}
+	if !strings.HasSuffix(addresses[0], ":"+strconv.Itoa(int(fixed))) {
+		t.Fatalf("the asked port was not bound: %q", addresses)
 	}
 }
