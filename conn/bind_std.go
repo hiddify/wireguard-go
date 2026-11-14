@@ -352,6 +352,7 @@ func (s *StdNetBind) receiveIP(
 	bufs [][]byte,
 	sizes []int,
 	eps []Endpoint,
+	pace *receivePace, //H: see h_receive_pace.go
 ) (n int, err error) {
 	msgs := s.getMessages()
 	for i := range bufs {
@@ -361,21 +362,25 @@ func (s *StdNetBind) receiveIP(
 	defer s.putMessages(msgs)
 	var numMsgs int
 	if runtime.GOOS == "linux" || runtime.GOOS == "android" {
+		pace.before() //H: a busy tunnel's datagrams are taken many at a call
 		if rxOffload {
 			readAt := len(*msgs) - (IdealBatchSize / udpSegmentMaxDatagrams)
 			numMsgs, err = br.ReadBatch((*msgs)[readAt:], 0)
 			if err != nil {
 				return 0, err
 			}
+			drained := numMsgs < len(*msgs)-readAt //H
 			numMsgs, err = splitCoalescedMessages(*msgs, readAt, getGSOSize)
 			if err != nil {
 				return 0, err
 			}
+			pace.afterRead(numMsgs, drained) //H
 		} else {
 			numMsgs, err = br.ReadBatch(*msgs, 0)
 			if err != nil {
 				return 0, err
 			}
+			pace.afterRead(numMsgs, numMsgs < len(*msgs)) //H
 		}
 	} else {
 		msg := &(*msgs)[0]
@@ -402,14 +407,16 @@ func (s *StdNetBind) receiveIP(
 }
 
 func (s *StdNetBind) makeReceiveIPv4(pc *ipv4.PacketConn, conn *net.UDPConn, rxOffload bool) ReceiveFunc {
+	var pace receivePace //H
 	return func(bufs [][]byte, sizes []int, eps []Endpoint) (n int, err error) {
-		return s.receiveIP(pc, conn, rxOffload, bufs, sizes, eps)
+		return s.receiveIP(pc, conn, rxOffload, bufs, sizes, eps, &pace) //H
 	}
 }
 
 func (s *StdNetBind) makeReceiveIPv6(pc *ipv6.PacketConn, conn *net.UDPConn, rxOffload bool) ReceiveFunc {
+	var pace receivePace //H
 	return func(bufs [][]byte, sizes []int, eps []Endpoint) (n int, err error) {
-		return s.receiveIP(pc, conn, rxOffload, bufs, sizes, eps)
+		return s.receiveIP(pc, conn, rxOffload, bufs, sizes, eps, &pace) //H
 	}
 }
 

@@ -249,6 +249,7 @@ type receiveMsgXState struct {
 	hdrs  []msghdrX
 	iovs  []unix.Iovec
 	names []unix.RawSockaddrInet6
+	pace  receivePace //H: see h_receive_pace.go
 }
 
 func (s *StdNetBind) makeReceiveMsgX(conn *net.UDPConn, isV6 bool) (ReceiveFunc, error) {
@@ -287,6 +288,7 @@ func (s *StdNetBind) makeReceiveMsgX(conn *net.UDPConn, isV6 bool) (ReceiveFunc,
 			n     uintptr
 			errno unix.Errno
 		)
+		state.pace.before() //H: a busy tunnel's datagrams are taken many at a call
 		readErr := rawConn.Read(func(fd uintptr) bool {
 			//nolint:staticcheck
 			n, _, errno = unix.RawSyscall6(unix.SYS_RECVMSG_X, fd,
@@ -295,6 +297,9 @@ func (s *StdNetBind) makeReceiveMsgX(conn *net.UDPConn, isV6 bool) (ReceiveFunc,
 		})
 		if readErr != nil {
 			return 0, readErr
+		}
+		if errno == 0 { //H
+			state.pace.after(int(n), count)
 		}
 		if errno != 0 {
 			// A connected UDP socket reports ICMP unreachable from the peer as
