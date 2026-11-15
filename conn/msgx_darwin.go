@@ -262,6 +262,7 @@ func (s *StdNetBind) makeReceiveMsgX(conn *net.UDPConn, isV6 bool) (ReceiveFunc,
 		iovs:  make([]unix.Iovec, msgXBatchSize),
 		names: make([]unix.RawSockaddrInet6, msgXBatchSize),
 	}
+	state.pace.sent = &s.hSent //H
 	return func(bufs [][]byte, sizes []int, eps []Endpoint) (int, error) {
 		// The endpoint is stored before the flag is raised, so reading the flag
 		// first never pairs a connected socket with a stale endpoint.

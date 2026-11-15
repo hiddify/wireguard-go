@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic" //H
 	"syscall"
 
 	"github.com/sagernet/sing/common"
@@ -65,6 +66,8 @@ type StdNetBind struct {
 
 	blackhole4 bool
 	blackhole6 bool
+
+	hSent atomic.Int64 //H: datagrams sent, all along, see h_receive_pace.go
 }
 
 func NewStdNetBind(externalControl control.Func) Bind {
@@ -407,14 +410,14 @@ func (s *StdNetBind) receiveIP(
 }
 
 func (s *StdNetBind) makeReceiveIPv4(pc *ipv4.PacketConn, conn *net.UDPConn, rxOffload bool) ReceiveFunc {
-	var pace receivePace //H
+	pace := receivePace{sent: &s.hSent} //H
 	return func(bufs [][]byte, sizes []int, eps []Endpoint) (n int, err error) {
 		return s.receiveIP(pc, conn, rxOffload, bufs, sizes, eps, &pace) //H
 	}
 }
 
 func (s *StdNetBind) makeReceiveIPv6(pc *ipv6.PacketConn, conn *net.UDPConn, rxOffload bool) ReceiveFunc {
-	var pace receivePace //H
+	pace := receivePace{sent: &s.hSent} //H
 	return func(bufs [][]byte, sizes []int, eps []Endpoint) (n int, err error) {
 		return s.receiveIP(pc, conn, rxOffload, bufs, sizes, eps, &pace) //H
 	}
@@ -493,6 +496,7 @@ func (s *StdNetBind) sendBufs(bufs [][]byte, endpoint Endpoint, offset int, modi
 		}
 		bufs = bufs[IdealBatchSize:]
 	}
+	s.hSent.Add(int64(len(bufs))) //H
 	if s.onWrite != nil && len(bufs) > 0 {
 		s.onWrite(len(bufs[0]) - offset)
 	}
